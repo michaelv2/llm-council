@@ -98,8 +98,8 @@ successes) + 1 chairman.
   `httpx2>=2.16` + `requires-python>=3.11`.
 - **Local model out of the review council** (hot path), kept in the plan
   council (cold path) — latency gates every stage via gather.
-- Ollama base URL: `http://qwen-lan:11434/v1` on the host; `llm-server:11434`
-  was used only inside the agentsafe container.
+- Ollama base URL: `http://llm-server:11434/v1`, on the host and inside the
+  agentsafe container alike (`qwen-lan` never resolved).
 
 ## Durability protocol (this container is throwaway)
 

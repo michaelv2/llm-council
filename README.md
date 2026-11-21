@@ -1,5 +1,13 @@
 # LLM Council
 
+> **This fork runs in service mode:** a one-shot `council` CLI (plus Vibe
+> skills) instead of the web app, using Mistral's API and a local Ollama
+> model. Setup and usage: [README-service.md](README-service.md); design
+> notes: [DESIGN.md](DESIGN.md). The web backend (`backend/main.py`,
+> `openrouter.py`, `storage.py`) was removed; `frontend/` is kept from
+> upstream but has no backend to talk to in this mode. The text below is
+> upstream's original description.
+
 ![llmcouncil](header.jpg)
 
 The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your "LLM Council". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response.
@@ -14,74 +22,19 @@ In a bit more detail, here is what happens when you submit a query:
 
 This project was 99% vibe coded as a fun Saturday hack because I wanted to explore and evaluate a number of LLMs side by side in the process of [reading books together with LLMs](https://x.com/karpathy/status/1990577951671509438). It's nice and useful to see multiple responses side by side, and also the cross-opinions of all LLMs on each other's outputs. I'm not going to support it in any way, it's provided here as is for other people's inspiration and I don't intend to improve it. Code is ephemeral now and libraries are over, ask your LLM to change it in whatever way you like.
 
-## Setup
-
-### 1. Install Dependencies
-
-The project uses [uv](https://docs.astral.sh/uv/) for project management.
-
-**Backend:**
-```bash
-uv sync
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm install
-cd ..
-```
-
-### 2. Configure API Key
-
-Create a `.env` file in the project root:
+## Quick start (service mode)
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...
+uv sync                          # also installs pytest (dev group)
+cp .env.example .env             # then fill in MISTRAL_API_KEY
+uv run python -m pytest tests -q # offline
+uv run council "What is 2+2? Reply with just the number." --json
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
-
-### 3. Configure Models (Optional)
-
-Edit `backend/config.py` to customize the council:
-
-```python
-COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
-]
-
-CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
-```
-
-## Running the Application
-
-**Option 1: Use the start script**
-```bash
-./start.sh
-```
-
-**Option 2: Run manually**
-
-Terminal 1 (Backend):
-```bash
-uv run python -m backend.main
-```
-
-Terminal 2 (Frontend):
-```bash
-cd frontend
-npm run dev
-```
-
-Then open http://localhost:5173 in your browser.
+Councils, chairmen and per-provider timeouts are configured in `council.yaml`.
 
 ## Tech Stack
 
-- **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
-- **Frontend:** React + Vite, react-markdown for rendering
-- **Storage:** JSON files in `data/conversations/`
+- **CLI:** Python 3.10+, async httpx, OpenAI-compatible APIs (Mistral, Ollama) and the Anthropic API
+- **Frontend (upstream, unused here):** React + Vite, react-markdown
 - **Package Management:** uv for Python, npm for JavaScript

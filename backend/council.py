@@ -10,10 +10,17 @@ Modes:
   code), stage 2 filters FALSE POSITIVE / DUPLICATE, the chairman returns
   "VERDICT: APPROVE" or "VERDICT: CHANGES NEEDED" plus a deduplicated list.
 
-Bug fix vs. the web version: stage 2 now only queries models that succeeded in
-stage 1 (previously, failed models were still asked to rank).
+Bug fixes vs. the web version:
+- stage 2 only queries models that succeeded in stage 1 (previously, failed
+  models were still asked to rank);
+- the response labels (Response A, B, ...) are shuffled per run, so the same
+  council seat isn't always shown first (position bias);
+- a ranking is read only from the last "FINAL RANKING:" section, duplicates
+  dropped; without that heading the evaluation counts as no vote (the old
+  fallback counted every "Response X" mentioned in the prose).
 """
 
+import random
 import re
 from collections import defaultdict
 from typing import Any, Optional
@@ -153,16 +160,23 @@ async def stage2_collect_rankings(
     stage1_results: list[dict],
     mode: str = "answer",
     timeout: Optional[float] = None,
+    rng: Optional[random.Random] = None,
 ):
-    """Stage 2: council models that succeeded in stage 1 evaluate the anonymized responses."""
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+    """Stage 2: council models that succeeded in stage 1 evaluate the anonymized responses.
+
+    The responses are shown in a shuffled order (pass rng to make it reproducible),
+    so no seat systematically benefits from being read first.
+    """
+    shuffled = list(stage1_results)
+    (rng or random).shuffle(shuffled)
+    labels = [chr(65 + i) for i in range(len(shuffled))]  # A, B, C, ...
     label_to_model = {
         f"Response {label}": result["model"]
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, shuffled)
     }
     responses_text = "\n\n".join(
         f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, shuffled)
     )
     messages = [{"role": "user", "content": _stage2_prompt(mode, task, responses_text)}]
 
@@ -204,26 +218,30 @@ async def stage3_synthesize_final(
 
     response = await registry.query(chairman, messages, timeout)
     if response is None:
+        # "failed" lets callers (cli.py) report the run as unsuccessful
         return {
             "model": chairman.name,
             "response": "Error: Unable to generate final synthesis.",
+            "failed": True,
         }
     return {"model": chairman.name, "response": response.get("content") or ""}
 
 
 def parse_ranking_from_text(ranking_text: str) -> list[str]:
-    """Parse the FINAL RANKING section from a model's response."""
-    if not isinstance(ranking_text, str):
+    """Parse the FINAL RANKING section from a model's response.
+
+    Reads the LAST "FINAL RANKING:" section (models sometimes echo the heading
+    from the instructions earlier on), prefers its numbered list, and keeps each
+    label once. Without the heading it returns [] (no vote): the labels in the
+    prose are discussion order, not a ranking.
+    """
+    if not isinstance(ranking_text, str) or "FINAL RANKING:" not in ranking_text:
         return []
-    if "FINAL RANKING:" in ranking_text:
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            numbered_matches = re.findall(r"\d+\.\s*Response [A-Z]", ranking_section)
-            if numbered_matches:
-                return [re.search(r"Response [A-Z]", m).group() for m in numbered_matches]
-            return re.findall(r"Response [A-Z]", ranking_section)
-    return re.findall(r"Response [A-Z]", ranking_text)
+    section = ranking_text.rsplit("FINAL RANKING:", 1)[1]
+    labels = re.findall(r"\d+\.\s*(Response [A-Z])\b", section)
+    if not labels:
+        labels = re.findall(r"\bResponse [A-Z]\b", section)
+    return list(dict.fromkeys(labels))
 
 
 def calculate_aggregate_rankings(
@@ -257,6 +275,7 @@ async def run_full_council(
     chairman: ModelEntry,
     mode: str = "answer",
     timeout: Optional[float] = None,
+    rng: Optional[random.Random] = None,
 ):
     """Run the complete 3-stage council process.
 
@@ -268,10 +287,11 @@ async def run_full_council(
         return [], [], {
             "model": "error",
             "response": "All models failed to respond. Please try again.",
+            "failed": True,
         }, {"mode": mode, "label_to_model": {}, "aggregate_rankings": []}
 
     stage2_results, label_to_model = await stage2_collect_rankings(
-        registry, council, task, stage1_results, mode, timeout
+        registry, council, task, stage1_results, mode, timeout, rng
     )
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
     stage3_result = await stage3_synthesize_final(

@@ -38,6 +38,8 @@ context finds the bugs" effect.
      followed by the deduplicated issue list (most severe first).
    - `stage1` — the raw reviewer issue lists, if you want to see what each
      model caught individually.
+   - `failures` — models that failed; a review with a missing seat had fewer
+     eyes on it, so say so when reporting the verdict.
 4. If CHANGES NEEDED: feed the issue list back as the next implementation
    task. Cap at 2 review iterations; if the council still disagrees or the
    verdict is split, escalate to the user instead of looping.
@@ -46,5 +48,6 @@ context finds the bugs" effect.
 
 - Review cost scales with artifact size — keep the diff focused; for large
   changes, review per-file or per-commit.
-- If all stage-1 models fail, the CLI exits 1 and `synthesis` is an error
-  string — treat as "review unavailable", not as APPROVE.
+- If all stage-1 models fail or the chairman fails, the CLI exits 1 and
+  `synthesis` is an error string — treat as "review unavailable", not as
+  APPROVE.

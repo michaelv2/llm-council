@@ -40,7 +40,7 @@ cp -r llm-council-service/skills/council-review ~/.vibe/skills/
 cp llm-council-service/tests/test_service.py tests/
 
 uv sync   # also installs the dev group (pytest); refreshes uv.lock automatically
-uv run python -m pytest tests/test_service.py -q   # offline, no network; expect 15 passed
+uv run python -m pytest tests/test_service.py -q   # offline, no network
 # one-off without the dev group: uv run --with pytest python -m pytest tests/ -q
 # `uv run council` works because pyproject now has a build-system (hatchling),
 # so uv sync installs the project and creates the script. If it is ever
@@ -54,9 +54,8 @@ uv run council "What is the capital of France?" --json
 - Model ids are verified against the live Mistral API (see VERIFIED.md):
   `mistral-large-4`, `deepseek-v4-1-flash-1017`, `zai-glm-5-3`,
   `zai-glm-5-3-flash`; Ollama: `qwen3.8:27b-128k`.
-- `providers.ollama.base_url`: set to `http://qwen-lan:11434/v1` on the host
-  (the bundle default already is; `llm-server:11434` was used only inside
-  the agentsafe container).
+- `providers.ollama.base_url`: `http://llm-server:11434/v1` (the default;
+  works on the host and inside the agentsafe container).
 - **Never add the implementer model to `councils.review`** (see DESIGN.md).
 - Review council is intentionally flash-only (hot path); the local model
   stays in the plan council (cold path). See DESIGN.md "cadence" rule.
@@ -70,8 +69,10 @@ cat diff.md | council --mode review --council review --json
 council --timeout 900 --config /path/to/council.yaml "..."
 ```
 
-Exit code 0 on success, 1 if all stage-1 models failed. Diagnostics go to
-stderr; `--json` stdout is machine-readable.
+Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed;
+an empty task is rejected before any model is called. Failed models are
+listed under `failures` in `--json` output (FAILURES in the text digest).
+Diagnostics go to stderr; `--json` stdout is machine-readable.
 
 ## httpx vs httpx2
 

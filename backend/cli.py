@@ -5,7 +5,9 @@ Usage:
     council --task-file task.md --mode plan --council default
     cat review-task.md | council --mode review --council review --json
 
-Exit code 0 on success, 1 if all stage-1 models failed.
+Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed
+(the synthesis is then an error string, not a verdict). Failed models are
+listed under "failures" in --json output and FAILURES in the digest.
 """
 
 import argparse
@@ -20,13 +22,18 @@ from .providers import ProviderRegistry
 
 def _read_task(args) -> str:
     if args.task:
-        return args.task
-    if args.task_file:
+        task = args.task
+    elif args.task_file:
         with open(args.task_file) as f:
-            return f.read()
-    if not sys.stdin.isatty():
-        return sys.stdin.read()
-    raise SystemExit("error: provide a task as an argument, via --task-file, or on stdin")
+            task = f.read()
+    elif not sys.stdin.isatty():
+        task = sys.stdin.read()
+    else:
+        raise SystemExit("error: provide a task as an argument, via --task-file, or on stdin")
+    # an empty task would still be sent to every model (and billed)
+    if not task.strip():
+        raise SystemExit("error: the task is empty")
+    return task
 
 
 def _render_digest(task, mode, stage1, stage2, stage3, meta, failed) -> str:
@@ -81,6 +88,11 @@ def main():
         run_full_council(task, registry, council, chairman, mode=args.mode, timeout=args.timeout)
     )
 
+    succeeded = {r["model"] for r in stage1}
+    failed = [e.name for e in council if e.name not in succeeded]
+    if stage3.get("failed") and stage1:
+        failed.append(f"{chairman.name} (chairman)")
+
     if args.json:
         print(json.dumps({
             "task": task,
@@ -91,13 +103,12 @@ def main():
             "stage1": stage1,
             "stage2": stage2,
             "synthesis": stage3.get("response", ""),
+            "failures": failed,
         }, indent=2))
     else:
-        succeeded = {r["model"] for r in stage1}
-        failed = [e.name for e in council if e.name not in succeeded]
         print(_render_digest(task, args.mode, stage1, stage2, stage3, meta, failed))
 
-    sys.exit(0 if stage1 else 1)
+    sys.exit(1 if stage3.get("failed") else 0)
 
 
 if __name__ == "__main__":

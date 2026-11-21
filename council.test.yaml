@@ -1,6 +1,5 @@
-# Test config for running inside the agentsafe container, where qwen-lan is
-# unreachable but llm-server:11434 serves the same Ollama models.
-# Uses cheap models for smoke tests; the real council.yaml is for the host.
+# Smoke-test config: cheap models for quick live checks (host or agentsafe
+# container); council.yaml is the real configuration.
 
 providers:
   ollama:

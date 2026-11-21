@@ -13,10 +13,9 @@
 
 providers:
   ollama:
-    # From the host, point at the qwen-lan Ollama. From the agentsafe
-    # container qwen-lan is unreachable, but llm-server:11434 serves the
-    # same models: http://llm-server:11434/v1
-    base_url: http://qwen-lan:11434/v1
+    # llm-server's Ollama; the same address works on the host and in the
+    # agentsafe container (which maps llm-server in extra_hosts)
+    base_url: http://llm-server:11434/v1
     timeout: 600                          # local inference is slow
   mistral:
     base_url: https://api.mistral.ai/v1

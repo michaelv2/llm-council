@@ -7,18 +7,24 @@ and parseable by both pyyaml and a plain json.loads stub.
 import asyncio
 import json
 import os
+import random
 import sys
 import tempfile
+from urllib.parse import urlparse
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+from backend import cli
 from backend.council import (
     calculate_aggregate_rankings,
     parse_ranking_from_text,
     run_full_council,
+    stage2_collect_rankings,
 )
 from backend.cli import _render_digest
-from backend.config import load_config
+from backend.config import CouncilConfig, load_config
 from backend.providers import ModelEntry, _message_content
 
 
@@ -72,6 +78,26 @@ def test_parse_ranking_fallback_and_garbage():
     assert parse_ranking_from_text(None) == []
 
 
+def test_parse_ranking_without_heading_is_no_vote():
+    # prose mentions are discussion order, not a ranking (old fallback counted
+    # them all, Response A twice here)
+    text = "Response A is thorough. Response B misses X, unlike Response A. Response C is weakest."
+    assert parse_ranking_from_text(text) == []
+
+
+def test_parse_ranking_uses_last_heading():
+    text = (
+        "I will end with FINAL RANKING: as asked.\nResponse C is best.\n\n"
+        "FINAL RANKING:\n1. Response C\n2. Response A\n3. Response B"
+    )
+    assert parse_ranking_from_text(text) == ["Response C", "Response A", "Response B"]
+
+
+def test_parse_ranking_drops_duplicates():
+    text = "FINAL RANKING:\n1. Response B\n2. Response A\n3. Response B"
+    assert parse_ranking_from_text(text) == ["Response B", "Response A"]
+
+
 # --- calculate_aggregate_rankings --------------------------------------------
 
 def test_aggregate_rankings_ordering():
@@ -94,7 +120,7 @@ def test_aggregate_rankings_empty():
 
 CONFIG_JSON = json.dumps({
     "providers": {
-        "ollama": {"base_url": "http://qwen-lan:11434/v1", "timeout": 600},
+        "ollama": {"base_url": "http://llm-server:11434/v1", "timeout": 600},
         "mistral": {"base_url": "https://api.mistral.ai/v1",
                     "key_env": "TEST_COUNCIL_MISTRAL_KEY", "timeout": 120},
     },
@@ -129,7 +155,7 @@ def test_load_config_entries_and_timeouts():
         assert set(cfg.councils) == {"default", "review"}
         ollama_entry = cfg.councils["default"][0]
         assert ollama_entry.name == "ollama/qwen3.8:27b"
-        assert ollama_entry.base_url == "http://qwen-lan:11434/v1"
+        assert ollama_entry.base_url == "http://llm-server:11434/v1"
         assert ollama_entry.timeout == 600.0
         mistral_entry = cfg.councils["default"][1]
         assert mistral_entry.key == "test-key"
@@ -164,6 +190,21 @@ def test_load_config_no_councils_fails():
                 raise AssertionError("expected ValueError for empty councils")
     finally:
         del os.environ["TEST_COUNCIL_MISTRAL_KEY"]
+
+
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
+@pytest.mark.parametrize("name", ["council.yaml", "council.test.yaml"])
+def test_shipped_configs_use_llm_server_for_ollama(name, monkeypatch):
+    # qwen-lan never resolved, so the local seat silently failed every run
+    monkeypatch.setenv("MISTRAL_API_KEY", "x")
+    cfg = load_config(os.path.join(REPO, name))
+    entries = [e for c in cfg.councils.values() for e in c] + list(cfg.chairmen.values())
+    ollama = [e for e in entries if e.provider == "ollama"]
+    assert ollama, f"{name} has no Ollama entry"
+    for e in ollama:
+        assert urlparse(e.base_url).hostname == "llm-server", e.base_url
 
 
 # --- run_full_council with a fake registry (offline) ---------------------------
@@ -219,8 +260,31 @@ def test_run_full_council_stage2_only_queries_stage1_successes():
     # stage 2 call must contain only the two stage-1 successes, not mistral/c
     stage2_call = registry.calls[1]
     assert set(stage2_call) == {"ollama/a", "mistral/b"}
-    assert stage3["response"] == "synthesis"
-    assert meta["aggregate_rankings"][0]["model"] == "ollama/a"
+    assert stage3["response"] == "synthesis" and not stage3.get("failed")
+    # labels are shuffled: the top model is whichever one got "Response A"
+    assert meta["aggregate_rankings"][0]["model"] == meta["label_to_model"]["Response A"]
+
+
+def test_stage2_labels_are_shuffled():
+    council, _ = _entries()
+    stage1 = [{"model": e.name, "response": f"answer {e.model}"} for e in council]
+    firsts = set()
+    for seed in range(20):
+        registry = FakeRegistry({})
+        _, label_to_model = asyncio.run(stage2_collect_rankings(
+            registry, council, "t", stage1, rng=random.Random(seed)
+        ))
+        assert sorted(label_to_model.values()) == sorted(e.name for e in council)
+        firsts.add(label_to_model["Response A"])
+    assert len(firsts) > 1, "the same seat was always Response A"
+
+
+def test_run_full_council_chairman_failure_is_flagged():
+    council, chair = _entries()
+    registry = FakeRegistry({e.name: "answer" for e in council} | {"mistral/chair": None})
+    stage1, _, stage3, _ = asyncio.run(run_full_council("task", registry, council, chair))
+    assert len(stage1) == 3
+    assert stage3["failed"] is True
 
 
 def test_run_full_council_all_fail_degenerate():
@@ -230,7 +294,7 @@ def test_run_full_council_all_fail_degenerate():
         run_full_council("task", registry, council, chair)
     )
     assert stage1 == [] and stage2 == []
-    assert "All models failed" in stage3["response"]
+    assert "All models failed" in stage3["response"] and stage3["failed"] is True
     assert meta["aggregate_rankings"] == []
 
 
@@ -275,3 +339,49 @@ def test_render_digest_empty_stage1():
     )
     assert "All models failed" in out
     assert "Aggregate peer rankings" not in out
+
+
+# --- CLI main (fake config + registry, no network) ------------------------------
+
+def _run_cli(monkeypatch, capsys, responses, argv):
+    council, chair = _entries()
+    cfg = CouncilConfig(councils={"default": council}, chairmen={"default": chair})
+    monkeypatch.setattr(cli, "load_config", lambda path=None: cfg)
+    monkeypatch.setattr(cli, "ProviderRegistry", lambda entries: FakeRegistry(responses))
+    monkeypatch.setattr(sys, "argv", ["council", *argv])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    return exc.value.code, capsys.readouterr().out
+
+
+def test_cli_json_lists_failures(monkeypatch, capsys):
+    code, out = _run_cli(monkeypatch, capsys, {
+        "ollama/a": None, "mistral/b": "B", "mistral/c": "C", "mistral/chair": "synthesis",
+    }, ["task", "--json"])
+    assert code == 0
+    assert json.loads(out)["failures"] == ["ollama/a"]
+
+
+def test_cli_chairman_failure_exits_1(monkeypatch, capsys):
+    code, out = _run_cli(monkeypatch, capsys, {
+        "ollama/a": "A", "mistral/b": "B", "mistral/c": "C", "mistral/chair": None,
+    }, ["task", "--json"])
+    assert code == 1
+    assert json.loads(out)["failures"] == ["mistral/chair (chairman)"]
+
+
+@pytest.mark.parametrize("stdin_text", ["", "  \n"])
+def test_cli_rejects_empty_task(monkeypatch, capsys, stdin_text):
+    import io
+    stdin = io.StringIO(stdin_text)
+    stdin.isatty = lambda: False
+    monkeypatch.setattr(sys, "stdin", stdin)
+
+    def no_config(path=None):
+        raise AssertionError("config loaded (and models queried) for an empty task")
+
+    monkeypatch.setattr(cli, "load_config", no_config)
+    monkeypatch.setattr(sys, "argv", ["council", "--json"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert "empty" in str(exc.value.code)

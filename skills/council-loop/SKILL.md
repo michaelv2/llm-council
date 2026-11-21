@@ -13,7 +13,7 @@ as council members. No daemon, no `council` CLI invocation.
 ```bash
 cp /path/to/llm-council/agents/*.toml ~/.vibe/agents/
 # merge /path/to/llm-council/config.snippet.toml into ~/.vibe/config.toml
-# (providers: mistral + ollama; model aliases: large4, deepseek-flash,
+# (providers: mistral + ollama; model aliases: mistral4, deepseek-flash,
 #  glm-flash, glm, qwen-local)
 ```
 
@@ -29,10 +29,11 @@ Stage prompts are in `prompts.md` next to this file (mirrors
    - review mode: `council-deepseek`, `council-glm-flash` (hot path,
      flash-only; **never the implementer's model**)
    Wait for all of them; collect each response.
-2. **Stage 2** — anonymize the responses as Response A, B, C... Send each
+2. **Stage 2** — anonymize the responses as Response A, B, C... in a
+   shuffled order (not the member order, to avoid position bias). Send each
    stage-1 member the stage-2 prompt (prompts.md) containing the anonymized
-   responses. Wait; collect. Parse each `FINAL RANKING:`; aggregate = average
-   position per member.
+   responses. Wait; collect. Parse each member's last `FINAL RANKING:` section
+   (no heading = no vote); aggregate = average position per member.
 3. **Stage 3** — spawn the chairman (`chairman-large4` for plan,
    `review-chairman` for review) with the task + all stage-1 responses +
    all stage-2 evaluations. Wait; its reply is the verdict/synthesis.
