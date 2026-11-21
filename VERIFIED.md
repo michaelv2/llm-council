@@ -69,3 +69,26 @@ httpx 0.28.1, pyyaml 6.0.4, python-dotenv 1.2.4. Config: council.test.yaml
 - Ollama on the actual qwen-lan host (unreachable from this container).
 - Anthropic / Fireworks transports (no keys here; code-reviewed only).
 - The web frontend (untouched, out of scope for service mode).
+
+## Pricing (per 1M tokens, input / output; from live pricing pages)
+
+Mistral API (docs.mistral.ai/models/pricing):
+- zai-glm-5-3:        $1.40 / $4.40   (cached $0.14)
+- zai-glm-5-3-flash:  $0.15 / $0.50   (cached $0.03)
+- deepseek-v4-1-flash-1017: $0.30 / $1.20 (cached $0.007)
+- mistral-large-4:    $0.70 / $2.10   (cached $0.07)
+
+Fireworks (fireworks.ai/pricing, on-demand):
+- minimax-m3 (accounts/fireworks/models/minimax-m3): $0.30 / $1.20 (cached $0.06)
+- GLM 5.3: $1.40 / $4.40; GLM 5.3 Flash: $0.15 / $0.50
+- Qwen 3.8 27B 128K: $1.86 / $5.60; GPT OSS 120B: $0.15 / $0.60; Nemotron 3.5 Lightning 30B: $0.05 / $0.20
+
+Estimated cost per council run (task ~2k tok, plan proposal ~4k, stage-2
+input ~14k; 7 calls per plan run, 5 per review run):
+- plan run, glm-5-3 member: ~$0.08; with minimax-m3: ~$0.05; with glm-flash: ~$0.04
+- review run, glm-5-3 chairman: ~$0.03 (chairman ~$0.02 of it); glm-flash chairman: ~$0.012
+
+Decision: plan council uses minimax-m3 (Fireworks) instead of zai-glm-5-3 —
+same price class as deepseek-flash, different family. Default council now
+requires FIREWORKS_API_KEY (fail-fast); comment out the fireworks block +
+minimax entry if no key yet.

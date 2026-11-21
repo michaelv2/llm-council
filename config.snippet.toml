@@ -36,7 +36,18 @@ name = "zai-glm-5-3"
 provider = "mistral"
 alias = "glm"
 
+[[providers]]
+name = "fireworks"
+api_base = "https://api.fireworks.ai/inference/v1"
+api_key_env_var = "FIREWORKS_API_KEY"
+backend = "llamacpp"   # generic OpenAI-compatible backend
+
 [[models]]
 name = "qwen3.8:27b-128k"
 provider = "ollama"
 alias = "qwen-local"
+
+[[models]]
+name = "accounts/fireworks/models/minimax-m3"
+provider = "fireworks"
+alias = "minimax-m3"
