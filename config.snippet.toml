@@ -1,0 +1,42 @@
+# Snippet to merge into ~/.vibe/config.toml for the council skill-loop mode.
+# Providers: Mistral API + local Ollama (OpenAI-compatible /v1 endpoint,
+# served via the generic local backend). Models: aliases used by the
+# agent profiles in agents/*.toml.
+
+[[providers]]
+name = "mistral"
+api_base = "https://api.mistral.ai/v1"
+api_key_env_var = "MISTRAL_API_KEY"
+backend = "mistral"
+
+[[providers]]
+name = "ollama"
+# host: qwen-lan; from the agentsafe container use http://llm-server:11434/v1
+api_base = "http://qwen-lan:11434/v1"
+api_key_env_var = ""
+backend = "llamacpp"   # generic OpenAI-compatible local backend; Ollama serves /v1
+
+[[models]]
+name = "mistral-large-4"
+provider = "mistral"
+alias = "large4"
+
+[[models]]
+name = "deepseek-v4-1-flash-1017"
+provider = "mistral"
+alias = "deepseek-flash"
+
+[[models]]
+name = "zai-glm-5-3-flash"
+provider = "mistral"
+alias = "glm-flash"
+
+[[models]]
+name = "zai-glm-5-3"
+provider = "mistral"
+alias = "glm"
+
+[[models]]
+name = "qwen3.8:27b-128k"
+provider = "ollama"
+alias = "qwen-local"

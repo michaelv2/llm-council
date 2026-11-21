@@ -68,6 +68,30 @@ council --timeout 900 --config /path/to/council.yaml "..."
 Exit code 0 on success, 1 if all stage-1 models failed. Diagnostics go to
 stderr; `--json` stdout is machine-readable.
 
+## Skill-loop mode (no service, no CLI)
+
+If you don't want to run anything persistently, the council can run entirely
+inside a Vibe session as a skill loop: subagents pinned to different models
+(agent profiles in `agents/*.toml`) play the council members, and the
+`council-loop` skill orchestrates the 3 stages. Nothing to deploy — but note
+the `council` CLI is also one-shot per call, not a daemon; the systemd
+daemon from SPEC.md §3b was optional and is not built.
+
+Setup once:
+
+```bash
+cp agents/*.toml ~/.vibe/agents/
+# merge config.snippet.toml into ~/.vibe/config.toml
+#   (providers: mistral + ollama at qwen-lan; model aliases:
+#    large4, deepseek-flash, glm-flash, glm, qwen-local)
+cp -r skills/council-loop ~/.vibe/skills/
+```
+
+Then load the `council-loop` skill in a session and follow its procedure
+(stage prompts in `skills/council-loop/prompts.md`). Trade-off vs the CLI:
+everything flows through the parent session's context, so it costs more
+tokens on big diffs; the CLI variant is better for large artifacts.
+
 ## httpx vs httpx2
 
 **Decided: stay on httpx (0.28.1) for now** — the bundle is verified live with
