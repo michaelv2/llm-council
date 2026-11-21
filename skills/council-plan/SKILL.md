@@ -21,9 +21,11 @@ Skip for small, well-specified tasks — the council latency is not worth it.
 1. Compose the planning task: the goal, relevant context (findings log,
    current design), and constraints. Write it to a temp file, e.g.
    `/tmp/plan-task.md`.
-2. Run the CLI from the llm-council repo (set `COUNCIL_HOME` once, e.g. in
-   `~/.vibe/.env` or your shell profile; default `/path/to/llm-council`):
-   `cd "${COUNCIL_HOME:-/path/to/llm-council}" && uv run python -m backend.cli --mode plan --council default --task-file /tmp/plan-task.md --json`
+2. Run the CLI from the llm-council repo on the host (`COUNCIL_HOME`
+   overrides the default `~/projects/llm-council`). Host only: inside the
+   agentsafe container (`/.dockerenv` exists) the repo's `.env` is hidden, so
+   use the council-loop skill there instead:
+   `cd "${COUNCIL_HOME:-$HOME/projects/llm-council}" && uv run python -m backend.cli --mode plan --council default --task-file /tmp/plan-task.md --json`
    (`uv run council ...` also works once `uv sync` has installed the script;
    `python -m backend.cli` works regardless of packaging)
 3. Read the JSON output:

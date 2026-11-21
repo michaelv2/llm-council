@@ -11,8 +11,8 @@ as council members. No daemon, no `council` CLI invocation.
 ## Setup (once)
 
 ```bash
-cp /path/to/llm-council/agents/*.toml ~/.vibe/agents/
-# merge /path/to/llm-council/config.snippet.toml into ~/.vibe/config.toml
+cp ~/projects/llm-council/agents/*.toml ~/.vibe/agents/
+# merge ~/projects/llm-council/config.snippet.toml into ~/.vibe/config.toml
 # (providers: mistral + ollama; model aliases: mistral4, deepseek-flash,
 #  glm-flash, glm, qwen-local)
 ```

@@ -109,11 +109,3 @@ successes) + 1 chairman.
   bugs): a MISSING kind for absent behavior (no line to quote), a CHECKED:
   line before NO ISSUES, a `check` field per issue, per-issue votes in stage 2
   instead of ranking reviewers, and `implementers` enforced by the CLI.
-
-## Durability protocol (this container is throwaway)
-
-- Bundle lives in the session scratchpad (`llm-council-service/`) AND in the
-  host-side transcript (every file written is visible there).
-- Scratchpad survives summarization within the session but is per-session;
-  the transcript on the host is the durable copy.
-- To apply: run `apply.sh /path/to/llm-council` on the host (see README.md).
