@@ -26,8 +26,11 @@ context finds the bugs" effect.
    substitute `{{DIFF}}` (e.g. `git diff` output or the changed file
    contents), `{{RULES}}` (the repo's AGENTS.md rules), `{{CRITERIA}}` (the
    task's acceptance criteria). Write to `/tmp/review-task.md`.
-2. Run from the llm-council repo:
-   `uv run council --mode review --council review --task-file /tmp/review-task.md --json`
+2. Run the CLI from the llm-council repo (set `COUNCIL_HOME` once, e.g. in
+   `~/.vibe/.env` or your shell profile; default `/path/to/llm-council`):
+   `cd "${COUNCIL_HOME:-/path/to/llm-council}" && uv run council --mode review --council review --task-file /tmp/review-task.md --json > /tmp/review-out.json`
+   (redirect full JSON to a file; read only the verdict into context — see the
+   sizing rule in `council-loop`)
 3. Parse the JSON:
    - `synthesis` starts with `VERDICT: APPROVE` or `VERDICT: CHANGES NEEDED`,
      followed by the deduplicated issue list (most severe first).

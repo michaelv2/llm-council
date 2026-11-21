@@ -21,8 +21,9 @@ Skip for small, well-specified tasks — the council latency is not worth it.
 1. Compose the planning task: the goal, relevant context (findings log,
    current design), and constraints. Write it to a temp file, e.g.
    `/tmp/plan-task.md`.
-2. Run from the llm-council repo:
-   `uv run council --mode plan --council default --task-file /tmp/plan-task.md --json`
+2. Run the CLI from the llm-council repo (set `COUNCIL_HOME` once, e.g. in
+   `~/.vibe/.env` or your shell profile; default `/path/to/llm-council`):
+   `cd "${COUNCIL_HOME:-/path/to/llm-council}" && uv run council --mode plan --council default --task-file /tmp/plan-task.md --json`
 3. Read the JSON output:
    - `stage1` — the raw proposals from each model. Show these to the
      implementer alongside the synthesis, not just the synthesis — the
