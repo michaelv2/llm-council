@@ -42,6 +42,10 @@ cp llm-council-service/tests/test_service.py tests/
 uv sync   # also installs the dev group (pytest); refreshes uv.lock automatically
 uv run python -m pytest tests/test_service.py -q   # offline, no network; expect 15 passed
 # one-off without the dev group: uv run --with pytest python -m pytest tests/ -q
+# `uv run council` works because pyproject now has a build-system (hatchling),
+# so uv sync installs the project and creates the script. If it is ever
+# missing (e.g. stale venv), re-run `uv sync`, or use the packaging-free form:
+#   uv run python -m backend.cli "What is the capital of France?" --json
 uv run council "What is the capital of France?" --json
 ```
 

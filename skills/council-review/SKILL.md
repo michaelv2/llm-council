@@ -28,7 +28,9 @@ context finds the bugs" effect.
    task's acceptance criteria). Write to `/tmp/review-task.md`.
 2. Run the CLI from the llm-council repo (set `COUNCIL_HOME` once, e.g. in
    `~/.vibe/.env` or your shell profile; default `/path/to/llm-council`):
-   `cd "${COUNCIL_HOME:-/path/to/llm-council}" && uv run council --mode review --council review --task-file /tmp/review-task.md --json > /tmp/review-out.json`
+   `cd "${COUNCIL_HOME:-/path/to/llm-council}" && uv run python -m backend.cli --mode review --council review --task-file /tmp/review-task.md --json > /tmp/review-out.json`
+   (`uv run council ...` also works once `uv sync` has installed the script;
+   `python -m backend.cli` works regardless of packaging)
    (redirect full JSON to a file; read only the verdict into context — see the
    sizing rule in `council-loop`)
 3. Parse the JSON:
