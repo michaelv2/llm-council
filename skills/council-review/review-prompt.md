@@ -21,8 +21,15 @@ You are reviewing a proposed change. Report issues ONLY with evidence.
 
 ## Output format
 
-Each issue on its own line:
+First a line starting `CHECKED:` listing the areas you examined. Then each
+issue on its own line, six fields:
 
-SEVERITY (blocker|major|minor|nit) | file:line | one-line description | quoted evidence
+SEVERITY | KIND | LOCATION | description | evidence | check
 
-If you find no issues, reply exactly: NO ISSUES
+- SEVERITY: blocker | major | minor | nit
+- KIND: BUG (present code is wrong) | MISSING (required behavior is absent) | RULE (breaks a repo rule)
+- LOCATION: file:line (for MISSING, the file where it belongs)
+- evidence: quoted code; for MISSING, the criterion or rule that is not met
+- check: an input, command or test that would demonstrate it, or "none"
+
+If you find no issues, write the CHECKED: line, then exactly: NO ISSUES

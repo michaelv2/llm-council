@@ -100,6 +100,14 @@ successes) + 1 chairman.
   council (cold path) — latency gates every stage via gather.
 - Ollama base URL: `http://llm-server:11434/v1`, on the host and inside the
   agentsafe container alike (`qwen-lan` never resolved).
+- **Plan angles**: each run randomly gives the plan seats different angles
+  (simplest-possible, most-robust, different-architecture), so diversity
+  doesn't rest on model family alone; random so no model is stuck with one
+  angle. `--no-angles` for comparison runs.
+- **Review format** (after a test where the council caught 1-2 of 5 known
+  bugs): a MISSING kind for absent behavior (no line to quote), a CHECKED:
+  line before NO ISSUES, a `check` field per issue, per-issue votes in stage 2
+  instead of ranking reviewers, and `implementers` enforced by the CLI.
 
 ## Durability protocol (this container is throwaway)
 

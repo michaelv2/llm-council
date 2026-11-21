@@ -9,6 +9,7 @@ import json
 import os
 import random
 import sys
+from collections import defaultdict
 import tempfile
 from urllib.parse import urlparse
 
@@ -16,16 +17,22 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+import httpx
+
 from backend import cli
 from backend.council import (
+    PLAN_ANGLES,
     calculate_aggregate_rankings,
+    parse_dropped,
+    parse_issues,
     parse_ranking_from_text,
+    parse_votes,
     run_full_council,
     stage2_collect_rankings,
 )
 from backend.cli import _render_digest
-from backend.config import CouncilConfig, load_config
-from backend.providers import ModelEntry, _message_content
+from backend.config import CouncilConfig, check_keys, load_config
+from backend.providers import ModelEntry, ProviderRegistry, _message_content
 
 
 # --- _message_content (Mistral returns content as a list of typed parts) ------
@@ -164,15 +171,36 @@ def test_load_config_entries_and_timeouts():
         del os.environ["TEST_COUNCIL_MISTRAL_KEY"]
 
 
-def test_load_config_missing_key_fails_fast():
+def test_missing_key_fails_only_for_the_entries_used():
     os.environ.pop("TEST_COUNCIL_MISTRAL_KEY", None)
     with tempfile.TemporaryDirectory() as d:
-        try:
-            load_config(_write_config(d))
-        except ValueError as e:
-            assert "TEST_COUNCIL_MISTRAL_KEY" in str(e)
-        else:
-            raise AssertionError("expected ValueError for missing key_env")
+        cfg = load_config(_write_config(d))  # loading no longer needs every key
+    # the Ollama-only review council runs without the Mistral key
+    check_keys(cfg.councils["review"])
+    with pytest.raises(ValueError, match="TEST_COUNCIL_MISTRAL_KEY"):
+        check_keys(cfg.councils["default"] + [cfg.chairmen["default"]])
+
+
+def test_key_is_never_read_from_the_yaml(tmp_path):
+    path = tmp_path / "council.yaml"
+    path.write_text(json.dumps({
+        "providers": {"custom": {"base_url": "http://x/v1", "key": "sk-from-yaml"}},
+        "councils": {"c": [{"provider": "custom", "model": "m"}]},
+    }))
+    assert load_config(str(path)).councils["c"][0].key == ""
+
+
+def test_anthropic_base_url_default_and_override(tmp_path):
+    path = tmp_path / "council.yaml"
+    path.write_text(json.dumps({
+        "providers": {"anthropic": {}, "proxy": {"base_url": "http://proxy"}},
+        "councils": {"c": [
+            {"provider": "anthropic", "model": "m"},
+            {"provider": "anthropic", "model": "n", "base_url": "http://proxy"},
+        ]},
+    }))
+    a, b = load_config(str(path)).councils["c"]
+    assert a.base_url == "https://api.anthropic.com" and b.base_url == "http://proxy"
 
 
 def test_load_config_no_councils_fails():
@@ -210,31 +238,31 @@ def test_shipped_configs_use_llm_server_for_ollama(name, monkeypatch):
 # --- run_full_council with a fake registry (offline) ---------------------------
 
 class FakeRegistry:
-    """Stands in for ProviderRegistry; records which entries were queried."""
+    """Stands in for ProviderRegistry; records which entries were queried.
+
+    responses maps entry name -> content string, None (failure), or a list of
+    those, consumed one per call (stage 1, stage 2, ...).
+    """
 
     def __init__(self, responses):
-        self.responses = responses  # entry name -> content string or None
+        self.responses = {k: (list(v) if isinstance(v, list) else v) for k, v in responses.items()}
         self.calls = []
+        self.messages = defaultdict(list)  # entry name -> messages of each call, in order
+
+    def _answer(self, name, messages):
+        self.messages[name].append(messages)
+        content = self.responses.get(name)
+        if isinstance(content, list):
+            content = content.pop(0) if content else None
+        return {"content": content, "reasoning_details": None} if content is not None else None
 
     async def query_parallel(self, entries, messages, timeout=None):
         self.calls.append([e.name for e in entries])
-        return {
-            e.name: (
-                {"content": self.responses[e.name], "reasoning_details": None}
-                if self.responses.get(e.name) is not None
-                else None
-            )
-            for e in entries
-        }
+        return {e.name: self._answer(e.name, messages) for e in entries}
 
     async def query(self, entry, messages, timeout=None):
         self.calls.append([entry.name])
-        content = self.responses.get(entry.name)
-        return (
-            {"content": content, "reasoning_details": None}
-            if content is not None
-            else None
-        )
+        return self._answer(entry.name, messages)
 
 
 def _entries():
@@ -271,7 +299,7 @@ def test_stage2_labels_are_shuffled():
     firsts = set()
     for seed in range(20):
         registry = FakeRegistry({})
-        _, label_to_model = asyncio.run(stage2_collect_rankings(
+        _, label_to_model, _ = asyncio.run(stage2_collect_rankings(
             registry, council, "t", stage1, rng=random.Random(seed)
         ))
         assert sorted(label_to_model.values()) == sorted(e.name for e in council)
@@ -285,6 +313,170 @@ def test_run_full_council_chairman_failure_is_flagged():
     stage1, _, stage3, _ = asyncio.run(run_full_council("task", registry, council, chair))
     assert len(stage1) == 3
     assert stage3["failed"] is True
+
+
+# --- review mode: structured issues and per-issue votes --------------------------
+
+REVIEW_A = """CHECKED: cli exit paths, config
+major | BUG | cli.py:100 | exit 0 when the chairman fails | `sys.exit(0 if stage1 else 1)` | stub the chairman to fail, check $?
+minor | MISSING | cli.py | empty task is sent | criterion: "reject empty input" | printf '' | council --json"""
+REVIEW_B = "CHECKED: providers\n- nit | BUG | council.py:19 | unused import | `Any` | none"
+
+
+def test_parse_issues_fields_and_kinds():
+    issues = parse_issues(REVIEW_A, "A")
+    assert [i["id"] for i in issues] == ["A1", "A2"]
+    assert issues[0]["severity"] == "major" and issues[0]["kind"] == "BUG"
+    assert issues[0]["location"] == "cli.py:100"
+    assert issues[1]["kind"] == "MISSING"
+    assert issues[1]["evidence"] == 'criterion: "reject empty input"'
+    assert parse_issues(REVIEW_B, "B")[0]["severity"] == "nit"  # bulleted line
+    assert parse_issues("CHECKED: everything\nNO ISSUES", "C") == []
+
+
+def test_parse_votes():
+    text = "A1 | REAL | yes\n- **B1**: FALSE POSITIVE | no\nA2 | duplicate of A1 | same"
+    assert parse_votes(text) == {"A1": "REAL", "B1": "FALSE POSITIVE", "A2": "DUPLICATE"}
+
+
+def test_review_mode_votes_exclude_self_and_reach_the_chairman():
+    council, chair = _entries()
+    council = council[:2]  # ollama/a, mistral/b
+    # stage 2 votes are written by id; ids depend on the shuffled labels, so
+    # each voter votes REAL on every id it could see
+    votes = "A1 | REAL | x\nA2 | REAL | x\nB1 | REAL | x\nB2 | REAL | x"
+    new = "NEW | major | MISSING | cli.py | failures not in JSON | criterion | run with a failing seat"
+    registry = FakeRegistry({
+        "ollama/a": [REVIEW_A, votes + "\n" + new],
+        "mistral/b": [REVIEW_B, votes],
+        "mistral/chair": "VERDICT: CHANGES NEEDED",
+    })
+    stage1, stage2, stage3, meta = asyncio.run(run_full_council(
+        "review", registry, council, chair, mode="review", rng=random.Random(1)
+    ))
+    issues = meta["issues"]
+    by_reviewer = defaultdict(list)
+    for i in issues:
+        by_reviewer[i["reviewer"]].append(i)
+    # a's two issues get only b's vote, b's issue only a's vote
+    assert all(i["votes"]["REAL"] == 1 for i in issues if "votes" in i)
+    assert len(by_reviewer["ollama/a"]) == 3  # 2 stage-1 issues + 1 NEW
+    assert [i["id"] for i in issues if "votes" not in i] == ["N1"]
+    assert meta["aggregate_rankings"] == []  # no peer ranking in review mode
+    chair_prompt = registry.messages["mistral/chair"][-1][0]["content"]
+    assert "[votes: REAL 1, FALSE POSITIVE 0, DUPLICATE 0]" in chair_prompt
+    assert "[NEW, unvoted]" in chair_prompt
+    stage1_system = registry.messages["mistral/b"][0][0]["content"]
+    assert "MISSING" in stage1_system and "CHECKED:" in stage1_system
+    stage2_prompt = registry.messages["mistral/b"][1][0]["content"]  # lists the ids
+    assert "For EVERY issue id above" in stage2_prompt
+
+
+def test_parse_dropped_section():
+    synthesis = (
+        "VERDICT: CHANGES NEEDED\n\nmajor | BUG | cli.py:1 | x | `y` | none\n\n"
+        "DROPPED:\nA2 | FALSE POSITIVE | the guard exists at cli.py:30\n"
+        "- B1 | DUPLICATE of A1 | same exit-code issue\n\nUNCHECKED: packaging"
+    )
+    assert parse_dropped(synthesis) == [
+        {"id": "A2", "verdict": "FALSE POSITIVE", "reason": "the guard exists at cli.py:30"},
+        {"id": "B1", "verdict": "DUPLICATE OF A1", "reason": "same exit-code issue"},
+    ]
+    assert parse_dropped("VERDICT: APPROVE") == []
+
+
+def test_review_chairman_must_account_for_dropped_issues():
+    council, chair = _entries()
+    registry = FakeRegistry({
+        "ollama/a": [REVIEW_A, "B1 | REAL | x"],
+        "mistral/b": [REVIEW_B, "A1 | REAL | x"],
+        "mistral/c": None,
+        "mistral/chair": "VERDICT: CHANGES NEEDED\nDROPPED:\nA2 | NOT CONFIRMED | no evidence",
+    })
+    _, _, _, meta = asyncio.run(run_full_council("r", registry, council, chair, mode="review"))
+    assert "DROPPED:" in registry.messages["mistral/chair"][-1][0]["content"]
+    assert [d["id"] for d in meta["dropped"]] == ["A2"]
+
+
+def test_cloudflare_520_is_retried(monkeypatch):
+    statuses = [520, 200]
+
+    def handler(request):
+        status = statuses.pop(0)
+        body = {"choices": [{"message": {"content": "ok"}}]} if status == 200 else {}
+        return httpx.Response(status, json=body)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    entry = ModelEntry(provider="mistral", model="m", base_url="https://api.mistral.ai/v1", key="k")
+    result = asyncio.run(ProviderRegistry([entry]).query(entry, [{"role": "user", "content": "q"}]))
+    assert result["content"] == "ok" and statuses == []
+
+
+# --- plan mode: random angles ------------------------------------------------------
+
+def test_plan_mode_assigns_distinct_random_angles():
+    council, chair = _entries()
+    seen = set()
+    for seed in range(10):
+        registry = FakeRegistry({e.name: ["proposal", "FINAL RANKING:\n1. Response A"] for e in council}
+                                | {"mistral/chair": "plan"})
+        stage1, _, _, meta = asyncio.run(run_full_council(
+            "t", registry, council, chair, mode="plan", rng=random.Random(seed)
+        ))
+        roles = meta["roles"]
+        assert sorted(roles.values()) == sorted(PLAN_ANGLES)
+        assert {r["model"]: r["role"] for r in stage1} == roles
+        seen.add(roles["ollama/a"])
+    assert len(seen) > 1, "the same seat always got the same angle"
+
+
+def test_plan_mode_angle_reaches_the_seat_and_can_be_turned_off():
+    council, chair = _entries()
+    registry = FakeRegistry({e.name: "p" for e in council} | {"mistral/chair": "plan"})
+    _, _, _, meta = asyncio.run(run_full_council("t", registry, council, chair, mode="plan"))
+    angle = meta["roles"]["mistral/b"]
+    stage1_system = registry.messages["mistral/b"][0][0]
+    assert stage1_system["role"] == "system"
+    assert f"Your assigned angle: {angle}." in stage1_system["content"]
+    registry2 = FakeRegistry({e.name: "p" for e in council} | {"mistral/chair": "plan"})
+    _, _, _, meta2 = asyncio.run(run_full_council(
+        "t", registry2, council, chair, mode="plan", angles=False
+    ))
+    assert meta2["roles"] == {}
+    assert "assigned angle" not in registry2.messages["mistral/b"][0][0]["content"]
+
+
+def test_timings_recorded():
+    council, chair = _entries()
+    registry = FakeRegistry({e.name: "x" for e in council} | {"mistral/chair": "s"})
+    _, _, _, meta = asyncio.run(run_full_council("t", registry, council, chair))
+    assert set(meta["timings"]) == {"stage1_s", "stage2_s", "stage3_s"}
+
+
+# --- transport ------------------------------------------------------------------------
+
+def test_keyless_provider_sends_no_authorization_and_calls_are_timed(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    entry = ModelEntry(provider="ollama", model="m", base_url="http://llm-server:11434/v1")
+    registry = ProviderRegistry([entry])
+    assert asyncio.run(registry.query(entry, [{"role": "user", "content": "q"}]))["content"] == "hi"
+    assert seen["auth"] is None
+    assert registry.calls[0]["model"] == "ollama/m" and registry.calls[0]["ok"] is True
 
 
 def test_run_full_council_all_fail_degenerate():
@@ -343,9 +535,10 @@ def test_render_digest_empty_stage1():
 
 # --- CLI main (fake config + registry, no network) ------------------------------
 
-def _run_cli(monkeypatch, capsys, responses, argv):
+def _run_cli(monkeypatch, capsys, responses, argv, implementers=()):
     council, chair = _entries()
-    cfg = CouncilConfig(councils={"default": council}, chairmen={"default": chair})
+    cfg = CouncilConfig(councils={"default": council}, chairmen={"default": chair},
+                        implementers=set(implementers))
     monkeypatch.setattr(cli, "load_config", lambda path=None: cfg)
     monkeypatch.setattr(cli, "ProviderRegistry", lambda entries: FakeRegistry(responses))
     monkeypatch.setattr(sys, "argv", ["council", *argv])
@@ -385,3 +578,16 @@ def test_cli_rejects_empty_task(monkeypatch, capsys, stdin_text):
     with pytest.raises(SystemExit) as exc:
         cli.main()
     assert "empty" in str(exc.value.code)
+
+
+def test_cli_review_refuses_the_implementer(monkeypatch, capsys):
+    code, _ = _run_cli(monkeypatch, capsys, {}, ["diff", "--mode", "review"],
+                       implementers=["mistral/chair"])
+    assert "implementers" in str(code) and "chairman" in str(code)
+
+
+def test_cli_implementer_may_chair_outside_review(monkeypatch, capsys):
+    code, out = _run_cli(monkeypatch, capsys, {
+        "ollama/a": "A", "mistral/b": "B", "mistral/c": "C", "mistral/chair": "s",
+    }, ["task", "--json"], implementers=["mistral/chair"])
+    assert code == 0 and "timings" in json.loads(out)

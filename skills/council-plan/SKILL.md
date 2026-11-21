@@ -33,6 +33,9 @@ Skip for small, well-specified tasks — the council latency is not worth it.
    - `synthesis` — the chairman's committed plan: chosen approach, rejected
      alternatives with reasons, first steps, risks.
    - `rankings` — aggregate peer ranking of the proposals.
+   - `roles` — the angle each model was given this run (randomly assigned:
+     simplest-possible, most-robust, different-architecture), so the
+     proposals differ by design. `--no-angles` turns this off.
    - `failures` — models that failed (a non-empty list means the brainstorm
      ran with fewer seats; mention it alongside the plan).
 4. The orchestrator picks or adapts the plan, then implements in a fresh
@@ -44,4 +47,5 @@ Skip for small, well-specified tasks — the council latency is not worth it.
   evaluation without that heading counts as no vote, so if rankings come back
   empty often, keep the council floor at instruction-tuned models.
 - Per-provider timeouts live in `council.yaml` (local Ollama gets 600s);
-  override per run with `--timeout`.
+  override per run with `--timeout`. `timings` in the JSON shows per-stage
+  and per-call durations: the local model usually gates each stage.

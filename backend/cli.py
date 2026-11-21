@@ -8,6 +8,10 @@ Usage:
 Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed
 (the synthesis is then an error string, not a verdict). Failed models are
 listed under "failures" in --json output and FAILURES in the digest.
+
+Review mode refuses any council seat or chairman listed under `implementers`
+in council.yaml. Plan mode gives each seat a random angle (--no-angles to
+turn that off). --json also reports per-stage and per-call timings.
 """
 
 import argparse
@@ -15,7 +19,7 @@ import asyncio
 import json
 import sys
 
-from .config import load_config
+from .config import check_keys, load_config
 from .council import run_full_council
 from .providers import ProviderRegistry
 
@@ -48,6 +52,19 @@ def _render_digest(task, mode, stage1, stage2, stage3, meta, failed) -> str:
                 f"({a['rankings_count']} votes){marker}"
             )
         lines.append("")
+    roles = meta.get("roles") or {}
+    if roles:
+        lines.append("Assigned angles:")
+        lines.extend(f"  {model}: {angle}" for model, angle in roles.items())
+        lines.append("")
+    issues = meta.get("issues") or []
+    if issues:
+        lines.append("Issues with peer votes (REAL/FALSE POSITIVE/DUPLICATE):")
+        for i in issues:
+            v = i.get("votes")
+            tally = f"{v['REAL']}/{v['FALSE POSITIVE']}/{v['DUPLICATE']}" if v else "new"
+            lines.append(f"  {i['id']} [{tally}] {i['severity']} {i['kind']} {i['location']}: {i['description']}")
+        lines.append("")
     heading = "REVIEW CHAIRMAN VERDICT:" if mode == "review" else "CHAIRMAN SYNTHESIS:"
     lines.append(heading)
     lines.append(stage3.get("response", ""))
@@ -71,6 +88,8 @@ def main():
     p.add_argument("--config", default=None, help="path to council.yaml")
     p.add_argument("--timeout", type=float, default=None, help="per-request timeout override (s)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.add_argument("--no-angles", action="store_true",
+                   help="plan mode: don't assign each seat an angle")
     args = p.parse_args()
 
     task = _read_task(args)
@@ -82,11 +101,25 @@ def main():
     if chairman_name not in cfg.chairmen:
         raise SystemExit(f"error: no chairman named {chairman_name!r} in config")
     chairman = cfg.chairmen[chairman_name]
+    if args.mode == "review":
+        # hard rule: a model never reviews its own work, not even as chairman
+        for seat in [*council, chairman]:
+            if seat.name in cfg.implementers:
+                role = "chairman" if seat is chairman else f"a seat on council {args.council!r}"
+                raise SystemExit(
+                    f"error: {seat.name} is listed under implementers in the config and "
+                    f"can't review as {role}; pick another with --council / --chairman"
+                )
+    try:
+        check_keys([*council, chairman])
+    except ValueError as e:
+        raise SystemExit(f"error: {e}")
 
     registry = ProviderRegistry(council + [chairman])
-    stage1, stage2, stage3, meta = asyncio.run(
-        run_full_council(task, registry, council, chairman, mode=args.mode, timeout=args.timeout)
-    )
+    stage1, stage2, stage3, meta = asyncio.run(run_full_council(
+        task, registry, council, chairman, mode=args.mode, timeout=args.timeout,
+        angles=not args.no_angles,
+    ))
 
     succeeded = {r["model"] for r in stage1}
     failed = [e.name for e in council if e.name not in succeeded]
@@ -100,10 +133,14 @@ def main():
             "council": args.council,
             "chairman": stage3.get("model", ""),
             "rankings": meta.get("aggregate_rankings", []),
+            "roles": meta.get("roles", {}),
+            "issues": meta.get("issues", []),
+            "dropped": meta.get("dropped", []),
             "stage1": stage1,
             "stage2": stage2,
             "synthesis": stage3.get("response", ""),
             "failures": failed,
+            "timings": {**meta.get("timings", {}), "calls": getattr(registry, "calls", [])},
         }, indent=2))
     else:
         print(_render_digest(task, args.mode, stage1, stage2, stage3, meta, failed))

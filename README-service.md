@@ -67,7 +67,21 @@ council "task"                          # answer mode, default council
 council --task-file task.md --mode plan --council default
 cat diff.md | council --mode review --council review --json
 council --timeout 900 --config /path/to/council.yaml "..."
+council --mode plan --no-angles "..."   # plan without the random per-seat angles
 ```
+
+- **plan** gives each seat a random angle (simplest-possible, most-robust,
+  different-architecture); `roles` in the JSON says who got which.
+- **review** reviewers write `SEVERITY | KIND | LOCATION | description |
+  evidence | check` lines after a `CHECKED:` line (KIND is BUG, MISSING or
+  RULE); stage 2 votes REAL / FALSE POSITIVE / DUPLICATE per issue id and
+  may add NEW issues; `issues` in the JSON has every issue with its votes,
+  and `dropped` the ones the chairman discarded, with reasons.
+  Any model under `implementers` in council.yaml is refused as a seat or
+  chairman.
+- `timings` in the JSON: seconds per stage plus every call (model, start
+  offset, duration, ok).
+- API keys are checked only for the council and chairman a run uses.
 
 Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed;
 an empty task is rejected before any model is called. Failed models are

@@ -49,6 +49,12 @@ councils:
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
     - {provider: mistral, model: zai-glm-5-3-flash}
 
+# Models that write the code under review. `council --mode review` refuses
+# any seat or chairman listed here (a model grades its own output with less
+# scrutiny), so a fallback can't quietly seat the implementer.
+implementers:
+  - {provider: mistral, model: mistral-large-4}
+
 chairmen:
   # Main-loop chairman: the orchestrator model, holds the goal context.
   default: {provider: mistral, model: mistral-large-4}

@@ -2,8 +2,12 @@
 
 Replaces the old hardcoded COUNCIL_MODELS / CHAIRMAN_MODEL / OpenRouter config.
 API keys come only from the environment (key_env in the YAML), never from the
-YAML itself. A provider in use whose key_env is unset fails fast at startup
-(except Ollama, which needs no key).
+YAML itself. Keys are checked for the council and chairman a run actually uses
+(check_keys), so a missing key for one provider doesn't block councils that
+don't use it. Ollama needs no key.
+
+`implementers` lists the models that write the code under review; they may not
+sit on a review council, not even as chairman (enforced by the CLI).
 """
 
 import os
@@ -26,30 +30,28 @@ def _default_config_path() -> str:
 
 DEFAULT_CONFIG_PATH = _default_config_path()
 
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
 
 @dataclass
 class CouncilConfig:
     providers: dict = field(default_factory=dict)
     councils: dict[str, list[ModelEntry]] = field(default_factory=dict)
     chairmen: dict[str, ModelEntry] = field(default_factory=dict)
+    implementers: set[str] = field(default_factory=set)  # entry names, "provider/model"
 
 
 def _entry(raw: dict, providers: dict) -> ModelEntry:
     provider = raw["provider"]
     pconf = dict(providers.get(provider, {}))
-    key_env = pconf.pop("key_env", None)
-    if key_env:
-        key = os.getenv(key_env, "")
-        if not key:
-            raise ValueError(
-                f"missing env var {key_env} required by provider {provider!r}"
-            )
-    else:
-        key = pconf.pop("key", "")
+    key_env = pconf.pop("key_env", "") or ""
+    key = os.getenv(key_env, "") if key_env else ""
     base_url = raw.get("base_url") or pconf.pop("base_url", "")
+    if not base_url and provider == "anthropic":
+        base_url = ANTHROPIC_BASE_URL
     timeout = float(raw.get("timeout", pconf.pop("timeout", 120.0)))
     max_tokens = int(raw.get("max_tokens", pconf.pop("max_tokens", 4096)))
-    if not base_url and provider != "anthropic":
+    if not base_url:
         raise ValueError(
             f"no base_url for provider {provider!r} (set it in council.yaml)"
         )
@@ -58,9 +60,20 @@ def _entry(raw: dict, providers: dict) -> ModelEntry:
         model=raw["model"],
         base_url=base_url,
         key=key,
+        key_env=key_env,
         timeout=timeout,
         max_tokens=max_tokens,
     )
+
+
+def check_keys(entries: list[ModelEntry]) -> None:
+    """Fail fast if any of these entries needs an env var that is unset."""
+    missing = sorted({e.key_env for e in entries if e.key_env and not e.key})
+    if missing:
+        users = sorted({e.provider for e in entries if e.key_env in missing})
+        raise ValueError(
+            f"missing env var(s) {', '.join(missing)} required by provider(s) {', '.join(users)}"
+        )
 
 
 def load_config(path: str | None = None) -> CouncilConfig:
@@ -81,6 +94,11 @@ def load_config(path: str | None = None) -> CouncilConfig:
     chairmen = {
         name: _entry(e, providers) for name, e in raw.get("chairmen", {}).items()
     }
+    implementers = {
+        f"{e['provider']}/{e['model']}" for e in raw.get("implementers", []) or []
+    }
     if not councils:
         raise ValueError(f"{path}: no councils defined")
-    return CouncilConfig(providers=providers, councils=councils, chairmen=chairmen)
+    return CouncilConfig(
+        providers=providers, councils=councils, chairmen=chairmen, implementers=implementers
+    )

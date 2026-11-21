@@ -3,12 +3,15 @@
 Modes:
 - "answer": original pipeline — parallel answers, anonymized peer ranking,
   chairman synthesis.
-- "plan": divergence-first brainstorming. Stage 1 proposes distinct approaches
-  (explicitly no convergence), stage 2 critiques them, the chairman commits to
-  a plan with rejected alternatives.
-- "review": stage 1 emits evidence-backed issue lists (file:line + quoted
-  code), stage 2 filters FALSE POSITIVE / DUPLICATE, the chairman returns
-  "VERDICT: APPROVE" or "VERDICT: CHANGES NEEDED" plus a deduplicated list.
+- "plan": divergence-first brainstorming. Each seat gets a randomly assigned
+  angle (simplest-possible, most-robust, different-architecture) so the
+  proposals differ by design, not just by model family; stage 2 critiques and
+  ranks them; the chairman commits to a plan with rejected alternatives.
+- "review": stage 1 reviewers emit structured issue lines (see REVIEW_FORMAT)
+  after a CHECKED: line; stage 2 votes on every issue by id (REAL / FALSE
+  POSITIVE / DUPLICATE) and may add NEW issues; the chairman gets the issues
+  with vote counts (self-votes excluded) and returns "VERDICT: APPROVE" or
+  "VERDICT: CHANGES NEEDED" plus a deduplicated list. No peer ranking.
 
 Bug fixes vs. the web version:
 - stage 2 only queries models that succeeded in stage 1 (previously, failed
@@ -20,12 +23,43 @@ Bug fixes vs. the web version:
   fallback counted every "Response X" mentioned in the prose).
 """
 
+import asyncio
 import random
 import re
+import time
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Optional
 
 from .providers import ModelEntry, ProviderRegistry
+
+# --- prompts -------------------------------------------------------------------
+
+REVIEW_FORMAT = """Report every issue as ONE line with six fields separated by " | ":
+SEVERITY | KIND | LOCATION | description | evidence | check
+- SEVERITY: blocker (wrong results, data loss or secret exposure in normal use) | major (wrong behavior in a realistic case, or a broken repo rule) | minor (edge case or misleading behavior) | nit (style, dead code)
+- KIND: BUG (code that is present behaves wrongly) | MISSING (required behavior is absent, so there is no line to quote) | RULE (breaks a repo rule)
+- LOCATION: file:line; for MISSING, the file where the behavior belongs
+- evidence: the exact offending code, quoted; for MISSING, quote the acceptance criterion or rule that is not met
+- check: a concrete input, command or test that would demonstrate the issue, or "none\""""
+
+PLAN_ANGLES = {
+    "simplest-possible": (
+        "Propose the SIMPLEST approach that could work: fewest moving parts, "
+        "least new code and dependencies. Say explicitly what you leave out and "
+        "why that is acceptable."
+    ),
+    "most-robust": (
+        "Propose the MOST ROBUST approach: how it behaves under failures, bad "
+        "input, load, partial outages and recovery, and how problems are "
+        "detected. Accept extra complexity where it buys reliability."
+    ),
+    "different-architecture": (
+        "Propose an approach with a FUNDAMENTALLY DIFFERENT architecture from "
+        "the obvious one: a different decomposition, data flow, tool or "
+        "execution model. Name the obvious design and explain what yours does "
+        "differently and when it wins."
+    ),
+}
 
 STAGE1_SYSTEM = {
     "plan": (
@@ -35,12 +69,14 @@ STAGE1_SYSTEM = {
         "diversity of approaches is the goal. Be specific and opinionated."
     ),
     "review": (
-        "You are a reviewer on a code-review council. Report issues ONLY with "
-        "evidence: quote the exact offending line and give file:line. Format each "
-        "issue as one line: SEVERITY (blocker|major|minor|nit) | file:line | "
-        "one-line description | quoted evidence. Check the repo rules and "
-        "acceptance criteria given in the task. If you find no issues, reply "
-        "exactly: NO ISSUES"
+        "You are a reviewer on a code-review council. Check the change against "
+        "the repo rules and acceptance criteria given in the task. Look for "
+        "missing behavior as well as wrong code: error paths, empty or invalid "
+        "input, and what other parts of the change rely on.\n\n"
+        + REVIEW_FORMAT
+        + "\n\nStart your reply with one line beginning \"CHECKED:\" that lists "
+        "the areas you examined. Then the issue lines, nothing else. If you find "
+        "no issues, write the CHECKED: line and then exactly: NO ISSUES"
     ),
     "answer": None,
 }
@@ -52,31 +88,38 @@ _RANKING_FORMAT = """IMPORTANT: Your final ranking MUST be formatted EXACTLY as 
 - Do not add any other text or explanations in the ranking section"""
 
 
-def _stage2_prompt(mode: str, task: str, responses_text: str) -> str:
+def _stage2_prompt(mode: str, task: str, responses_text: str, issues_text: str = "") -> str:
     if mode == "review":
-        return f"""You are validating issue lists from other reviewers of the following change:
+        return f"""You are validating issue reports from other reviewers of the following change:
 
 Task: {task}
 
-Here are the anonymized reviewer reports:
+The anonymized reviewer reports:
 
 {responses_text}
 
-For each reported issue, judge it: REAL, FALSE POSITIVE, or DUPLICATE — with a one-line justification that quotes the code. Then evaluate each report overall: which reviewer caught the most real issues, which reports are noise.
+The issues to judge, by id:
 
-{_RANKING_FORMAT}
+{issues_text or "(no issues were reported)"}
 
-Now provide your evaluation and ranking:"""
+For EVERY issue id above, write one line:
+ID | REAL or FALSE POSITIVE or DUPLICATE of <ID> | one-line justification quoting the code or criterion
+Judge each claim against the change itself, not against the reviewer's wording.
+
+Then, if the reviewers missed a real issue, add it as a line starting with "NEW | " followed by the six-field format:
+{REVIEW_FORMAT}
+
+Write nothing else."""
     if mode == "plan":
         return f"""You are evaluating anonymized proposals for the following task:
 
 Task: {task}
 
-Proposals:
+Each proposal was written from a deliberately assigned angle (shown with it), so they are meant to differ. Proposals:
 
 {responses_text}
 
-For each proposal: what would make it fail in practice? What is missing? Which assumption could be wrong? Then rank the proposals by risk-adjusted expected value.
+For each proposal: what would make it fail in practice? What is missing? Which assumption could be wrong? Which of its ideas are worth keeping even if the proposal as a whole is not chosen? Then rank the proposals by risk-adjusted expected value.
 
 {_RANKING_FORMAT}
 
@@ -109,25 +152,147 @@ FINAL RANKING:
 Now provide your evaluation and ranking:"""
 
 
-def _stage3_prompt(mode: str, task: str, stage1_text: str, stage2_text: str) -> str:
+def _stage3_prompt(
+    mode: str, task: str, stage1_text: str, stage2_text: str, issues_text: str = ""
+) -> str:
     base = (
         f"Original task:\n{task}\n\n"
         f"STAGE 1 - Individual responses:\n{stage1_text}\n\n"
         f"STAGE 2 - Peer evaluations:\n{stage2_text}\n\n"
     )
     if mode == "plan":
-        return base + """You are the chairman of a planning council. Commit to ONE plan:
+        return base + """You are the chairman of a planning council. The proposals were written from different assigned angles. Commit to ONE plan (you may combine ideas from several proposals; say which):
 1. Chosen approach and why (weigh the peer critiques, not just the raw proposals)
 2. Rejected alternatives and why
 3. Concrete first steps
 4. Risks, and how to detect early that the plan is wrong"""
     if mode == "review":
-        return base + """You are the chairman of a review council. The implementer is NOT on this council.
+        return base + f"""ISSUES WITH PEER VOTES (votes exclude the issue's own author; NEW issues were raised in stage 2 and are unvoted):
+{issues_text or "(none)"}
+
+You are the chairman of a review council. The implementer is NOT on this council.
 Start your response with exactly one line: "VERDICT: APPROVE" or "VERDICT: CHANGES NEEDED".
-Then give the deduplicated issue list, most severe first, each as one line:
-SEVERITY | file:line | description | quoted evidence
-Drop false positives and duplicates. If every reviewer reported NO ISSUES and you agree after checking, return VERDICT: APPROVE with no list."""
+Then the deduplicated issue list, most severe first, in the same six-field format:
+{REVIEW_FORMAT}
+Keep issues that the votes support or that you can confirm from the change yourself; drop false positives and merge duplicates. You may add an issue you find yourself.
+Account for EVERY issue id above: after the list, write a line "DROPPED:" followed by one line per id you did not keep:
+ID | FALSE POSITIVE or DUPLICATE of <ID> or NOT CONFIRMED | one-line reason
+Dropping an issue that a peer voted REAL, or one with no votes, needs a reason grounded in the change.
+If the reviewers' CHECKED: lines leave an important area of the change unexamined, add one line "UNCHECKED: <areas>" at the end.
+If no real issues remain, return VERDICT: APPROVE with no list (but still the DROPPED: section if any issues were reported)."""
     return base + """You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses. Synthesize all of this into a single, comprehensive, accurate answer to the original task. Consider the individual responses, the peer rankings, and any patterns of agreement or disagreement. Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
+
+
+# --- parsing -------------------------------------------------------------------
+
+_SEVERITY = r"(blocker|major|minor|nit)"
+_ISSUE_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])?\s*\**" + _SEVERITY + r"\**\s*\|(.*)$", re.I | re.M
+)
+_NEW_RE = re.compile(r"^\s*(?:[-*]\s*)?\**NEW\**\s*\|\s*" + _SEVERITY + r"\s*\|(.*)$", re.I | re.M)
+_VOTE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?\**([A-Z]\d+|N\d+)\**\s*[|:]\s*\**(REAL|FALSE POSITIVE|DUPLICATE)",
+    re.I | re.M,
+)
+
+
+def _issue_fields(severity: str, rest: str) -> dict:
+    parts = [p.strip() for p in rest.split("|", 4)]
+    parts += [""] * (5 - len(parts))
+    kind, location, description, evidence, check = parts
+    return {
+        "severity": severity.lower(),
+        "kind": kind.upper(),
+        "location": location,
+        "description": description,
+        "evidence": evidence,
+        "check": check,
+    }
+
+
+def parse_issues(text: str, prefix: str) -> list[dict]:
+    """Issue lines from a stage-1 review, with ids prefix+1, prefix+2, ..."""
+    if not isinstance(text, str):
+        return []
+    return [
+        {"id": f"{prefix}{n}", **_issue_fields(m.group(1), m.group(2))}
+        for n, m in enumerate(_ISSUE_RE.finditer(text), start=1)
+    ]
+
+
+def parse_new_issues(text: str) -> list[dict]:
+    """NEW issue lines raised by a stage-2 validator (ids assigned by the caller)."""
+    if not isinstance(text, str):
+        return []
+    return [_issue_fields(m.group(1), m.group(2)) for m in _NEW_RE.finditer(text)]
+
+
+def parse_votes(text: str) -> dict[str, str]:
+    """{issue id: REAL | FALSE POSITIVE | DUPLICATE}; the last vote per id wins."""
+    if not isinstance(text, str):
+        return {}
+    return {m.group(1).upper(): m.group(2).upper() for m in _VOTE_RE.finditer(text)}
+
+
+_DROPPED_LINE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?\**([A-Z]\d+|N\d+)\**\s*\|\s*([^|]+?)\s*\|\s*(.*?)\s*$", re.M
+)
+
+
+def parse_dropped(synthesis: str) -> list[dict]:
+    """The chairman's DROPPED: section -> [{id, verdict, reason}]."""
+    if not isinstance(synthesis, str) or "DROPPED:" not in synthesis:
+        return []
+    section = synthesis.rsplit("DROPPED:", 1)[1].split("UNCHECKED:", 1)[0]
+    return [
+        {"id": m.group(1).upper(), "verdict": m.group(2).upper(), "reason": m.group(3)}
+        for m in _DROPPED_LINE_RE.finditer(section)
+    ]
+
+
+def parse_ranking_from_text(ranking_text: str) -> list[str]:
+    """Parse the FINAL RANKING section from a model's response.
+
+    Reads the LAST "FINAL RANKING:" section (models sometimes echo the heading
+    from the instructions earlier on), prefers its numbered list, and keeps each
+    label once. Without the heading it returns [] (no vote): the labels in the
+    prose are discussion order, not a ranking.
+    """
+    if not isinstance(ranking_text, str) or "FINAL RANKING:" not in ranking_text:
+        return []
+    section = ranking_text.rsplit("FINAL RANKING:", 1)[1]
+    labels = re.findall(r"\d+\.\s*(Response [A-Z])\b", section)
+    if not labels:
+        labels = re.findall(r"\bResponse [A-Z]\b", section)
+    return list(dict.fromkeys(labels))
+
+
+def _issue_line(issue: dict) -> str:
+    return " | ".join(
+        issue[k] for k in ("severity", "kind", "location", "description", "evidence", "check")
+    )
+
+
+def _issues_with_votes_text(issues: list[dict]) -> str:
+    lines = []
+    for i in issues:
+        if "votes" in i:
+            v = i["votes"]
+            tally = (f"[votes: REAL {v['REAL']}, FALSE POSITIVE {v['FALSE POSITIVE']}, "
+                     f"DUPLICATE {v['DUPLICATE']}]")
+        else:
+            tally = "[NEW, unvoted]"
+        lines.append(f"{i['id']} {tally} {_issue_line(i)}")
+    return "\n".join(lines)
+
+
+# --- stages --------------------------------------------------------------------
+
+def assign_angles(council: list[ModelEntry], rng=None) -> dict[str, str]:
+    """Randomly give each seat a different plan angle (cycling if seats > angles)."""
+    angles = list(PLAN_ANGLES)
+    (rng or random).shuffle(angles)
+    return {e.name: angles[i % len(angles)] for i, e in enumerate(council)}
 
 
 async def stage1_collect_responses(
@@ -136,21 +301,39 @@ async def stage1_collect_responses(
     task: str,
     mode: str = "answer",
     timeout: Optional[float] = None,
+    roles: Optional[dict[str, str]] = None,
 ) -> list[dict]:
-    """Stage 1: collect individual responses from all council models."""
-    messages = []
+    """Stage 1: collect individual responses from all council models.
+
+    roles (plan mode) maps entry name -> angle; each seat then gets its own
+    system prompt.
+    """
     system = STAGE1_SYSTEM.get(mode)
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": task})
 
-    responses = await registry.query_parallel(council, messages, timeout)
+    def messages_for(entry: ModelEntry) -> list[dict]:
+        text = system
+        if roles and entry.name in roles:
+            angle = roles[entry.name]
+            text = f"{system}\n\nYour assigned angle: {angle}. {PLAN_ANGLES[angle]}"
+        msgs = [{"role": "system", "content": text}] if text else []
+        return msgs + [{"role": "user", "content": task}]
 
-    return [
-        {"model": name, "response": r.get("content") or ""}
-        for name, r in responses.items()
-        if r is not None
-    ]
+    if roles:
+        results = await asyncio.gather(
+            *[registry.query(e, messages_for(e), timeout) for e in council]
+        )
+        responses = {e.name: r for e, r in zip(council, results)}
+    else:
+        responses = await registry.query_parallel(council, messages_for(council[0]), timeout)
+
+    out = []
+    for name, r in responses.items():
+        if r is not None:
+            item = {"model": name, "response": r.get("content") or ""}
+            if roles and name in roles:
+                item["role"] = roles[name]
+            out.append(item)
+    return out
 
 
 async def stage2_collect_rankings(
@@ -165,7 +348,8 @@ async def stage2_collect_rankings(
     """Stage 2: council models that succeeded in stage 1 evaluate the anonymized responses.
 
     The responses are shown in a shuffled order (pass rng to make it reproducible),
-    so no seat systematically benefits from being read first.
+    so no seat systematically benefits from being read first. Returns
+    (stage2_results, label_to_model, issues); issues is [] outside review mode.
     """
     shuffled = list(stage1_results)
     (rng or random).shuffle(shuffled)
@@ -174,11 +358,20 @@ async def stage2_collect_rankings(
         f"Response {label}": result["model"]
         for label, result in zip(labels, shuffled)
     }
-    responses_text = "\n\n".join(
-        f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, shuffled)
-    )
-    messages = [{"role": "user", "content": _stage2_prompt(mode, task, responses_text)}]
+
+    def header(label, result):
+        role = f" (angle: {result['role']})" if result.get("role") else ""
+        return f"Response {label}{role}:\n{result['response']}"
+
+    responses_text = "\n\n".join(header(lb, r) for lb, r in zip(labels, shuffled))
+
+    issues: list[dict] = []
+    if mode == "review":
+        for label, result in zip(labels, shuffled):
+            for issue in parse_issues(result["response"], label):
+                issues.append({**issue, "reviewer": result["model"]})
+    issues_text = "\n".join(f"{i['id']}: {_issue_line(i)}" for i in issues)
+    messages = [{"role": "user", "content": _stage2_prompt(mode, task, responses_text, issues_text)}]
 
     # Bug fix: only models that succeeded in stage 1 participate in stage 2.
     succeeded = {r["model"] for r in stage1_results}
@@ -188,14 +381,41 @@ async def stage2_collect_rankings(
 
     stage2_results = []
     for name, r in responses.items():
-        if r is not None:
-            text = r.get("content") or ""
-            stage2_results.append({
-                "model": name,
-                "ranking": text,
-                "parsed_ranking": parse_ranking_from_text(text),
-            })
-    return stage2_results, label_to_model
+        if r is None:
+            continue
+        text = r.get("content") or ""
+        item = {"model": name, "ranking": text}
+        if mode == "review":
+            item["votes"] = parse_votes(text)
+            item["parsed_ranking"] = []
+        else:
+            item["parsed_ranking"] = parse_ranking_from_text(text)
+        stage2_results.append(item)
+
+    if mode == "review":
+        issues = tally_votes(issues, stage2_results)
+    return stage2_results, label_to_model, issues
+
+
+def tally_votes(issues: list[dict], stage2_results: list[dict]) -> list[dict]:
+    """Attach vote counts to each issue (a reviewer's votes on its own issues are
+    ignored) and append the NEW issues raised in stage 2."""
+    tallied = []
+    for issue in issues:
+        votes = {"REAL": 0, "FALSE POSITIVE": 0, "DUPLICATE": 0}
+        for r in stage2_results:
+            if r["model"] == issue["reviewer"]:
+                continue
+            verdict = r.get("votes", {}).get(issue["id"])
+            if verdict in votes:
+                votes[verdict] += 1
+        tallied.append({**issue, "votes": votes})
+    n = 0
+    for r in stage2_results:
+        for new in parse_new_issues(r["ranking"]):
+            n += 1
+            tallied.append({"id": f"N{n}", **new, "reviewer": r["model"]})
+    return tallied
 
 
 async def stage3_synthesize_final(
@@ -206,15 +426,21 @@ async def stage3_synthesize_final(
     stage2_results: list[dict],
     mode: str = "answer",
     timeout: Optional[float] = None,
+    issues: Optional[list[dict]] = None,
 ) -> dict:
     """Stage 3: chairman synthesizes the final response."""
-    stage1_text = "\n\n".join(
-        f"Model: {r['model']}\nResponse: {r['response']}" for r in stage1_results
-    )
+    def s1(r):
+        role = f" (angle: {r['role']})" if r.get("role") else ""
+        return f"Model: {r['model']}{role}\nResponse: {r['response']}"
+
+    stage1_text = "\n\n".join(s1(r) for r in stage1_results)
     stage2_text = "\n\n".join(
         f"Model: {r['model']}\nEvaluation: {r['ranking']}" for r in stage2_results
     )
-    messages = [{"role": "user", "content": _stage3_prompt(mode, task, stage1_text, stage2_text)}]
+    issues_text = _issues_with_votes_text(issues or [])
+    messages = [{"role": "user", "content": _stage3_prompt(
+        mode, task, stage1_text, stage2_text, issues_text
+    )}]
 
     response = await registry.query(chairman, messages, timeout)
     if response is None:
@@ -233,23 +459,6 @@ async def stage3_synthesize_final(
             "failed": True,
         }
     return {"model": chairman.name, "response": content}
-
-
-def parse_ranking_from_text(ranking_text: str) -> list[str]:
-    """Parse the FINAL RANKING section from a model's response.
-
-    Reads the LAST "FINAL RANKING:" section (models sometimes echo the heading
-    from the instructions earlier on), prefers its numbered list, and keeps each
-    label once. Without the heading it returns [] (no vote): the labels in the
-    prose are discussion order, not a ranking.
-    """
-    if not isinstance(ranking_text, str) or "FINAL RANKING:" not in ranking_text:
-        return []
-    section = ranking_text.rsplit("FINAL RANKING:", 1)[1]
-    labels = re.findall(r"\d+\.\s*(Response [A-Z])\b", section)
-    if not labels:
-        labels = re.findall(r"\bResponse [A-Z]\b", section)
-    return list(dict.fromkeys(labels))
 
 
 def calculate_aggregate_rankings(
@@ -284,31 +493,53 @@ async def run_full_council(
     mode: str = "answer",
     timeout: Optional[float] = None,
     rng: Optional[random.Random] = None,
+    angles: bool = True,
 ):
     """Run the complete 3-stage council process.
 
-    Returns (stage1_results, stage2_results, stage3_result, metadata).
+    angles: in plan mode, give each seat a random angle (PLAN_ANGLES).
+    Returns (stage1_results, stage2_results, stage3_result, metadata); metadata
+    has the mode, label_to_model, aggregate_rankings, issues (review), roles
+    (plan) and per-stage wall-clock timings.
     """
-    stage1_results = await stage1_collect_responses(registry, council, task, mode, timeout)
+    roles = assign_angles(council, rng) if (mode == "plan" and angles) else {}
+    timings = {}
+    t = time.monotonic()
+    stage1_results = await stage1_collect_responses(
+        registry, council, task, mode, timeout, roles or None
+    )
+    timings["stage1_s"] = round(time.monotonic() - t, 1)
 
     if not stage1_results:
         return [], [], {
             "model": "error",
             "response": "All models failed to respond. Please try again.",
             "failed": True,
-        }, {"mode": mode, "label_to_model": {}, "aggregate_rankings": []}
+        }, {"mode": mode, "label_to_model": {}, "aggregate_rankings": [],
+            "issues": [], "roles": roles, "timings": timings}
 
-    stage2_results, label_to_model = await stage2_collect_rankings(
+    t = time.monotonic()
+    stage2_results, label_to_model, issues = await stage2_collect_rankings(
         registry, council, task, stage1_results, mode, timeout, rng
     )
+    timings["stage2_s"] = round(time.monotonic() - t, 1)
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+
+    t = time.monotonic()
     stage3_result = await stage3_synthesize_final(
-        registry, chairman, task, stage1_results, stage2_results, mode, timeout
+        registry, chairman, task, stage1_results, stage2_results, mode, timeout, issues
     )
+    timings["stage3_s"] = round(time.monotonic() - t, 1)
 
     metadata = {
         "mode": mode,
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings,
+        "issues": issues,
+        "roles": roles,
+        "timings": timings,
     }
+    if mode == "review":
+        # the chairman's DROPPED: section, so a discarded true issue stays visible
+        metadata["dropped"] = parse_dropped(stage3_result.get("response", ""))
     return stage1_results, stage2_results, stage3_result, metadata

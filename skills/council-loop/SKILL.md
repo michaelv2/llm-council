@@ -23,7 +23,9 @@ Stage prompts are in `prompts.md` next to this file (mirrors
 `backend/council.py` in the llm-council repo).
 
 1. **Stage 1** — spawn one subagent per council member, each with the task
-   plus the mode's stage-1 system text as its first message:
+   plus the mode's stage-1 system text as its first message. In plan mode,
+   shuffle the three angles in prompts.md and give each member a different
+   one (append it to the system text):
    - plan mode: `council-qwen`, `council-deepseek`, `council-glm-flash` (one
      seat per model family)
    - review mode: `council-deepseek`, `council-glm-flash` (hot path,
@@ -31,18 +33,23 @@ Stage prompts are in `prompts.md` next to this file (mirrors
    Wait for all of them; collect each response.
 2. **Stage 2** — anonymize the responses as Response A, B, C... in a
    shuffled order (not the member order, to avoid position bias). Send each
-   stage-1 member the stage-2 prompt (prompts.md) containing the anonymized
-   responses. Wait; collect. Parse each member's last `FINAL RANKING:` section
-   (no heading = no vote); aggregate = average position per member.
+   stage-1 member the stage-2 prompt for the mode (prompts.md) containing the
+   anonymized responses. Wait; collect.
+   - plan / answer: parse each member's last `FINAL RANKING:` section (no
+     heading = no vote); aggregate = average position per member.
+   - review: number each issue line by its response label (A1, A2, B1, ...)
+     before sending; members vote per id; count votes per issue, ignoring a
+     member's votes on its own issues; collect any `NEW |` issues.
 3. **Stage 3** — spawn the chairman (`chairman-large4` for plan,
    `review-chairman` for review) with the task + all stage-1 responses +
-   all stage-2 evaluations. Wait; its reply is the verdict/synthesis.
+   all stage-2 evaluations (review: plus the issue list with vote counts).
+   Wait; its reply is the verdict/synthesis.
 
 ## Output
 
 Return to the caller: the chairman's verdict (review: the `VERDICT:` line +
 deduplicated issue list), each member's raw stage-1 response, and the
-aggregate ranking. For review mode, CHANGES NEEDED feeds back as the next
+aggregate ranking (plan) or per-issue votes (review). For review mode, CHANGES NEEDED feeds back as the next
 task — max 2 iterations, then escalate to the user.
 
 ## Gotchas

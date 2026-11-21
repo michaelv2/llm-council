@@ -14,17 +14,21 @@ Gotchas handled here:
   models ([{"type": "thinking", ...}, {"type": "text", ...}]), not a string —
   see _message_content.
 - Diagnostics go to stderr so `council --json` stdout stays machine-readable.
+- Every call is timed into ProviderRegistry.calls (model, start offset,
+  elapsed, ok) so slow seats are visible in the CLI output.
 """
 
 import asyncio
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
 
-# Statuses worth one retry (rate limits / transient server errors).
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# Statuses worth one retry (rate limits / transient server errors). 520-524
+# are Cloudflare's origin errors, seen live from api.mistral.ai.
+RETRYABLE_STATUS = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
 
 
 def _message_content(message: dict) -> tuple[str, Any]:
@@ -64,6 +68,7 @@ class ModelEntry:
     model: str               # provider-specific model id
     base_url: str = ""
     key: str = ""
+    key_env: str = ""        # env var the key came from (for check_keys)
     timeout: float = 120.0
     max_tokens: int = 4096   # required by the Anthropic API
 
@@ -77,6 +82,8 @@ class ProviderRegistry:
 
     def __init__(self, entries: list[ModelEntry]):
         self._entries = {e.name: e for e in entries}
+        self._t0 = time.monotonic()
+        self.calls: list[dict] = []
 
     def get(self, name: str) -> ModelEntry:
         return self._entries[name]
@@ -88,6 +95,19 @@ class ProviderRegistry:
         timeout: Optional[float] = None,
     ) -> Optional[dict]:
         timeout = timeout if timeout is not None else entry.timeout
+        start = time.monotonic()
+        result = await self._query_with_retry(entry, messages, timeout)
+        self.calls.append({
+            "model": entry.name,
+            "start_s": round(start - self._t0, 1),
+            "elapsed_s": round(time.monotonic() - start, 1),
+            "ok": result is not None,
+        })
+        return result
+
+    async def _query_with_retry(
+        self, entry: ModelEntry, messages: list[dict], timeout: float
+    ) -> Optional[dict]:
         for attempt in (1, 2):
             try:
                 if entry.provider == "anthropic":
@@ -121,10 +141,9 @@ class ProviderRegistry:
     async def _query_openai_compatible(
         self, entry: ModelEntry, messages: list[dict], timeout: float
     ) -> dict:
-        headers = {
-            "Authorization": f"Bearer {entry.key or 'ollama'}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if entry.key:  # keyless (Ollama): send no credential rather than a fake one
+            headers["Authorization"] = f"Bearer {entry.key}"
         payload = {"model": entry.model, "messages": messages}
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
@@ -163,7 +182,7 @@ class ProviderRegistry:
             payload["system"] = system
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                f"{(entry.base_url or 'https://api.anthropic.com').rstrip('/')}/v1/messages",
                 headers=headers,
                 json=payload,
             )
