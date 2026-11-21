@@ -16,10 +16,13 @@ api_base = "http://qwen-lan:11434/v1"
 api_key_env_var = ""
 backend = "llamacpp"   # generic OpenAI-compatible local backend; Ollama serves /v1
 
-[[models]]
-name = "mistral-large-4"
-provider = "mistral"
-alias = "large4"
+# NOTE: if ~/.vibe/config.toml already defines mistral-large-4 (e.g. alias
+# "Mistral Large 4"), do NOT add a duplicate [[models]] entry — reuse the
+# existing alias in agents/chairman-large4.toml instead.
+# [[models]]
+# name = "mistral-large-4"
+# provider = "mistral"
+# alias = "large4"
 
 [[models]]
 name = "deepseek-v4-1-flash-1017"
