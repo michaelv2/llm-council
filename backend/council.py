@@ -224,7 +224,15 @@ async def stage3_synthesize_final(
             "response": "Error: Unable to generate final synthesis.",
             "failed": True,
         }
-    return {"model": chairman.name, "response": response.get("content") or ""}
+    content = response.get("content") or ""
+    if not content.strip():
+        # seen live: a large stage-3 prompt can yield an empty text part
+        return {
+            "model": chairman.name,
+            "response": "Error: chairman returned an empty response.",
+            "failed": True,
+        }
+    return {"model": chairman.name, "response": content}
 
 
 def parse_ranking_from_text(ranking_text: str) -> list[str]:

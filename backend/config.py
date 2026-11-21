@@ -14,9 +14,17 @@ from dotenv import load_dotenv
 
 from .providers import ModelEntry
 
-DEFAULT_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "council.yaml"
-)
+def _default_config_path() -> str:
+    # Package-relative first: works for editable installs and `python -m` from
+    # the repo root. If the package was installed as a wheel (site-packages),
+    # fall back to ./council.yaml in the cwd.
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "council.yaml")
+    if os.path.exists(here):
+        return here
+    return os.path.abspath("council.yaml")
+
+
+DEFAULT_CONFIG_PATH = _default_config_path()
 
 
 @dataclass
@@ -58,6 +66,11 @@ def _entry(raw: dict, providers: dict) -> ModelEntry:
 def load_config(path: str | None = None) -> CouncilConfig:
     load_dotenv()
     path = path or os.environ.get("COUNCIL_CONFIG", DEFAULT_CONFIG_PATH)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"council config not found at {path!r} — pass --config, set "
+            f"COUNCIL_CONFIG, or run from the repo root (council.yaml)"
+        )
     with open(path) as f:
         raw = yaml.safe_load(f)
     providers = raw.get("providers", {})
