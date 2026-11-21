@@ -23,7 +23,7 @@ This file is the durable record; code lives alongside it in this bundle.
 |---|---|---|
 | Main-loop orchestrator / plan chairman | mistral-large-4 | Open-ended loop needs broad judgment ("is this finding worth notifying?") + large context; small models lose the thread under compaction. |
 | Implementer ("doer") | mistral-large-4, fresh context per task | koderz lesson: intelligence must live with the agent doing the work, or the large model rewrites a small model's output token-by-token. |
-| council-plan reviewers (COLD path) | qwen3.8:27b-128k (local) + deepseek-v4-1-flash-1017 + zai-glm-5-3-flash + zai-glm-5-3 | Brainstorming wants cross-family diversity; local model kept here because plan runs are periodic and latency is tolerable. |
+| council-plan reviewers (COLD path) | qwen3.8:27b-128k (local) + deepseek-v4-1-flash-1017 + zai-glm-5-3 | One seat per model family — glm-flash and glm-full are the same family (correlated blind spots), so a 4th seat added little; full glm kept here for depth (cold path), flash reserved for the hot review path. Local model kept because plan runs are periodic and latency is tolerable. |
 | council-review reviewers (HOT path) | deepseek-v4-1-flash-1017 + zai-glm-5-3-flash only | Review runs every iteration; the local 27B takes minutes per call and `asyncio.gather` waits for the slowest entry, so it would gate every stage of every run. Flash-only = seconds. (Optional local seat: small model like phi3:3.8b, or per-entry `timeout: 120` so a slow call is skipped, not gating.) |
 | council-review chairman | zai-glm-5-3 | **Must not be the implementer.** |
 

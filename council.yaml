@@ -29,13 +29,13 @@ providers:
 
 councils:
   # Planning / brainstorming council (council-plan, --council default).
-  # COLD path (runs periodically, latency tolerable): keep the local qwen
-  # for cross-family diversity and privacy. Cross-family diversity is the
-  # point: local qwen + hosted deepseek/glm.
+  # COLD path (runs periodically, latency tolerable). One seat per model
+  # FAMILY — glm-flash and glm-full are the same family (correlated blind
+  # spots), so the 4th seat added little; keep full glm here for depth and
+  # reserve glm-flash for the review hot path.
   default:
     - {provider: ollama,  model: qwen3.8:27b-128k}
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
-    - {provider: mistral, model: zai-glm-5-3-flash}
     - {provider: mistral, model: zai-glm-5-3}
   # Review council (council-review, --council review).
   # HOT path (runs every implement->review iteration): hosted flash models

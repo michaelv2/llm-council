@@ -24,7 +24,8 @@ Stage prompts are in `prompts.md` next to this file (mirrors
 
 1. **Stage 1** — spawn one subagent per council member, each with the task
    plus the mode's stage-1 system text as its first message:
-   - plan mode: `council-qwen`, `council-deepseek`, `council-glm-flash`, `council-glm`
+   - plan mode: `council-qwen`, `council-deepseek`, `council-glm` (one seat
+     per model family; `council-glm-flash` is reserved for the review hot path)
    - review mode: `council-deepseek`, `council-glm-flash` (hot path,
      flash-only; **never the implementer's model**)
    Wait for all of them; collect each response.
