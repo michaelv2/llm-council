@@ -3,13 +3,13 @@
 # (see .env.example). key_env names the env var each provider needs.
 #
 # Model ids verified against the live APIs (see VERIFIED.md):
-#   Mistral:  mistral-large-4, deepseek-v4-1-flash-1017, zai-glm-5-3, zai-glm-5-3-flash
-#   Ollama:   qwen3.8:27b-128k
-#   Fireworks: accounts/fireworks/models/minimax-m3
+#   Mistral: mistral-large-4, deepseek-v4-1-flash-1017, zai-glm-5-3, zai-glm-5-3-flash
+#   Ollama:  qwen3.8:27b-128k
 #
-# Prices per 1M tokens (input/output), see VERIFIED.md:
-#   zai-glm-5-3 $1.40/$4.40  vs  zai-glm-5-3-flash $0.15/$0.50
-#   minimax-m3  $0.30/$1.20 (Fireworks) — flash-priced, different family
+# Vendor surface is deliberately minimal: Mistral API + local Ollama only.
+# Fireworks was tried (minimax-m3) and removed to keep data on two vendors;
+# the transport still supports it (see providers.py) — re-add a provider
+# block + entry if needed. Prices in VERIFIED.md.
 
 providers:
   ollama:
@@ -23,10 +23,6 @@ providers:
     key_env: MISTRAL_API_KEY
     # 300s: large reasoning models on big stage-3 prompts can exceed 120s
     timeout: 300
-  fireworks:
-    base_url: https://api.fireworks.ai/inference/v1
-    key_env: FIREWORKS_API_KEY
-    timeout: 120
   # anthropic:
   #   key_env: ANTHROPIC_API_KEY
   #   max_tokens: 4096
@@ -35,16 +31,11 @@ providers:
 councils:
   # Planning / brainstorming council (council-plan, --council default).
   # COLD path (runs periodically, latency tolerable). One seat per model
-  # FAMILY: local qwen + deepseek (Mistral) + minimax-m3 (Fireworks).
-  # glm-5-3 was dropped here on cost ($1.40/$4.40 per 1M vs $0.30/$1.20 for
-  # minimax-m3) and family overlap with glm-flash; it remains the review
-  # chairman. NOTE: the default council now requires FIREWORKS_API_KEY —
-  # if you don't have one yet, comment out the fireworks provider block and
-  # the minimax-m3 entry.
+  # FAMILY: local qwen + deepseek-flash + glm-flash (all via Mistral).
   default:
-    - {provider: ollama,    model: qwen3.8:27b-128k}
-    - {provider: mistral,   model: deepseek-v4-1-flash-1017}
-    - {provider: fireworks, model: accounts/fireworks/models/minimax-m3}
+    - {provider: ollama,  model: qwen3.8:27b-128k}
+    - {provider: mistral, model: deepseek-v4-1-flash-1017}
+    - {provider: mistral, model: zai-glm-5-3-flash}
   # Review council (council-review, --council review).
   # HOT path (runs every implement->review iteration): hosted flash models
   # only. The local 27B takes minutes per call and asyncio.gather waits for

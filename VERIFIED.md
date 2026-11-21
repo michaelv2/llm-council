@@ -92,3 +92,12 @@ Decision: plan council uses minimax-m3 (Fireworks) instead of zai-glm-5-3 —
 same price class as deepseek-flash, different family. Default council now
 requires FIREWORKS_API_KEY (fail-fast); comment out the fireworks block +
 minimax entry if no key yet.
+
+## Update: Fireworks removed
+
+MiniMax M3 (Fireworks) was wired into the plan council for cost/diversity,
+then removed to keep the vendor surface at Mistral API + local Ollama only
+(user decision — fewer vendors see the data). The Fireworks transport remains
+in providers.py; re-add a provider block + council entry to restore it.
+Plan council is now qwen-local + deepseek-flash + glm-flash (chairman
+mistral-large-4), ~$0.04 per run. Pricing table above kept for reference.

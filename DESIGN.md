@@ -23,7 +23,7 @@ This file is the durable record; code lives alongside it in this bundle.
 |---|---|---|
 | Main-loop orchestrator / plan chairman | mistral-large-4 | Open-ended loop needs broad judgment ("is this finding worth notifying?") + large context; small models lose the thread under compaction. |
 | Implementer ("doer") | mistral-large-4, fresh context per task | koderz lesson: intelligence must live with the agent doing the work, or the large model rewrites a small model's output token-by-token. |
-| council-plan reviewers (COLD path) | qwen3.8:27b-128k (local) + deepseek-v4-1-flash-1017 (Mistral) + minimax-m3 (Fireworks) | One seat per model family. glm-5-3 was dropped on cost ($1.40/$4.40 per 1M in/out vs minimax-m3 $0.30/$1.20) and family overlap with glm-flash; glm-5-3 remains review chairman. Local model kept because plan runs are periodic and latency is tolerable. |
+| council-plan reviewers (COLD path) | qwen3.8:27b-128k (local) + deepseek-v4-1-flash-1017 + zai-glm-5-3-flash (Mistral) | One seat per model family. Vendor surface kept to Mistral + local Ollama only (Fireworks/minimax-m3 was tried and removed); glm-5-3 full stays out of members on cost ($1.40/$4.40 per 1M) and remains review chairman. Local model kept because plan runs are periodic and latency is tolerable. |
 | council-review reviewers (HOT path) | deepseek-v4-1-flash-1017 + zai-glm-5-3-flash only | Review runs every iteration; the local 27B takes minutes per call and `asyncio.gather` waits for the slowest entry, so it would gate every stage of every run. Flash-only = seconds. (Optional local seat: small model like phi3:3.8b, or per-entry `timeout: 120` so a slow call is skipped, not gating.) |
 | council-review chairman | zai-glm-5-3 | **Must not be the implementer.** |
 
