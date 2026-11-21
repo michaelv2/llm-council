@@ -76,8 +76,11 @@ STAGE1_SYSTEM = {
         "input, and what other parts of the change rely on.\n\n"
         + REVIEW_FORMAT
         + "\n\nStart your reply with one line beginning \"CHECKED:\" that lists "
-        "the areas you examined. Then the issue lines, nothing else. If you find "
-        "no issues, write the CHECKED: line and then exactly: NO ISSUES"
+        "the areas you examined. Then the issue lines, nothing else. List only "
+        "issues you still believe are real after checking: if you look into "
+        "something and conclude it is fine, leave it out (no \"no issue\" or "
+        "\"skip\" lines; every line you list is voted on). If you find no "
+        "issues, write the CHECKED: line and then exactly: NO ISSUES"
     ),
     "answer": None,
 }
@@ -107,7 +110,7 @@ For EVERY issue id above, write one line:
 ID | REAL or FALSE POSITIVE or DUPLICATE of <ID> | one-line justification quoting the code or criterion
 Judge each claim against the change itself, not against the reviewer's wording.
 
-Then, if the reviewers missed a real issue, add it as a line starting with "NEW | " followed by the six-field format:
+Then, if the reviewers missed a real issue, add it as a line starting with "NEW | " followed by the six-field format (only issues you believe are real):
 {REVIEW_FORMAT}
 
 Write nothing else."""

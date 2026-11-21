@@ -36,20 +36,19 @@ councils:
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
     - {provider: mistral, model: zai-glm-5-3-flash}
   # Review council (council-review, --council review).
-  # HOT path (runs every implement->review iteration). Three seats so each
-  # issue gets two peer votes (with two seats, one vote decided every issue),
-  # and three model families. Each stage waits for the slowest seat: measured
-  # 2026-11-21, glm-flash took 93-136s per stage and local qwen 100-170s
-  # (deepseek under 15s), so qwen's own 300s timeout caps how long it can
-  # hold up a stage; a slower call is skipped with a stderr warning and shows
-  # up in "failures". Ollama serves qwen one request at a time, so parallel
-  # council runs queue on it.
+  # HOT path (runs every implement->review iteration): hosted models only.
+  # Local qwen was tried as a third seat (2026-11-21) and removed: with
+  # thinking it took 200-265s per stage (near its 300s cap; one of two
+  # stage-1 replies came back empty) and found nothing the others missed,
+  # adding ~5 min per review; with thinking off (reasoning_effort: none) it
+  # answered in 33s but its only issue was wrong. Each stage waits for the
+  # slowest seat (glm-flash, 93-136s). Cost: one peer vote per issue; the
+  # chairman's DROPPED: list shows what that vote discarded.
   # HARD RULE: never add the implementer model here — a model grades its own
   # output with less scrutiny (familiarity bias). See DESIGN.md.
   review:
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
     - {provider: mistral, model: zai-glm-5-3-flash}
-    - {provider: ollama,  model: qwen3.8:27b-128k, timeout: 300}
 
 # Models that write the code under review. `council --mode review` refuses
 # any seat or chairman listed here (a model grades its own output with less

@@ -469,6 +469,8 @@ def test_review_mode_votes_exclude_self_and_reach_the_chairman():
     assert "[NEW, unvoted]" in chair_prompt
     stage1_system = registry.messages["mistral/b"][0][0]["content"]
     assert "MISSING" in stage1_system and "CHECKED:" in stage1_system
+    # reviewers must not list issues they have already rejected (they inflate stage 2)
+    assert "leave it out" in stage1_system
     stage2_prompt = registry.messages["mistral/b"][1][0]["content"]  # lists the ids
     assert "For EVERY issue id above" in stage2_prompt
 

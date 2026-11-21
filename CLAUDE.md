@@ -50,7 +50,7 @@ Kept from upstream (React + Vite) but unused: it expects the removed FastAPI bac
 
 ## Key Design Decisions
 
-- **Councils per cadence** (`council.yaml`): both include the local qwen model; the review council (hot path) caps it with its own `timeout: 300`, since `asyncio.gather` waits for the slowest seat. Three review seats give each issue two peer votes.
+- **Councils per cadence** (`council.yaml`): the plan council (cold path) includes the slow local qwen model; the review council (hot path) is hosted models only, since `asyncio.gather` waits for the slowest seat (qwen was tried there and removed: 200-265s per stage with thinking, wrong answers without).
 - **Never put the implementer model on the review council**, not even as chairman (familiarity bias). See DESIGN.md.
 - **Ollama address**: `http://llm-server:11434/v1`, the same on the host and in the agentsafe container. `qwen-lan` does not resolve.
 - **Anonymized peer review**: models see only "Response X" labels; the chairman and the output see model names.

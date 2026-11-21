@@ -45,8 +45,11 @@ review mode:
 > (the review issue format above)
 >
 > Start your reply with one line beginning "CHECKED:" that lists the areas
-> you examined. Then the issue lines, nothing else. If you find no issues,
-> write the CHECKED: line and then exactly: NO ISSUES
+> you examined. Then the issue lines, nothing else. List only issues you
+> still believe are real after checking: if you look into something and
+> conclude it is fine, leave it out (no "no issue" or "skip" lines; every
+> line you list is voted on). If you find no issues, write the CHECKED: line
+> and then exactly: NO ISSUES
 
 ## Stage 2 prompt (send to each stage-1 member, with anonymized responses)
 

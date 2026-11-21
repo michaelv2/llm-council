@@ -28,9 +28,8 @@ Stage prompts are in `prompts.md` next to this file (mirrors
    one (append it to the system text):
    - plan mode: `council-qwen`, `council-deepseek`, `council-glm-flash` (one
      seat per model family)
-   - review mode: `council-deepseek`, `council-glm-flash`, `council-qwen`
-     (three seats so each issue gets two peer votes; if qwen hasn't answered
-     after ~5 minutes, go on without it; **never the implementer's model**)
+   - review mode: `council-deepseek`, `council-glm-flash` (hot path, hosted
+     only; **never the implementer's model**)
    Wait for all of them; collect each response.
 2. **Stage 2** — anonymize the responses as Response A, B, C... in a
    shuffled order (not the member order, to avoid position bias). Send each

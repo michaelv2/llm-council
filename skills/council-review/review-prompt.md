@@ -32,4 +32,6 @@ SEVERITY | KIND | LOCATION | description | evidence | check
 - evidence: quoted code; for MISSING, the criterion or rule that is not met
 - check: an input, command or test that would demonstrate it, or "none"
 
+List only issues you still believe are real after checking; leave out
+anything you looked into and found fine (every listed line is voted on).
 If you find no issues, write the CHECKED: line, then exactly: NO ISSUES

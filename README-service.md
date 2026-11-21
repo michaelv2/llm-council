@@ -57,9 +57,9 @@ uv run council "What is the capital of France?" --json
 - `providers.ollama.base_url`: `http://llm-server:11434/v1` (the default;
   works on the host and inside the agentsafe container).
 - **Never add the implementer model to `councils.review`** (see DESIGN.md).
-- Review council: deepseek-flash, glm-flash and local qwen (own `timeout: 300`,
-  so a slow qwen call is skipped rather than holding up the run). Three
-  seats give each issue two peer votes. See DESIGN.md "cadence" rule.
+- Review council: deepseek-flash and glm-flash (hot path). Local qwen was
+  tried as a third seat and removed: too slow with thinking, wrong without.
+  See DESIGN.md "cadence" rule.
 
 ## CLI usage
 
