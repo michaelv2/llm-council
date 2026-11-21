@@ -3,5 +3,5 @@ agent_type = "subagent"
 description = "Council chairman running mistral-large-4. Synthesizes stage-1 responses + stage-2 peer evaluations into the final plan/answer. Never use as a reviewer of its own implementation."
 # alias of the existing mistral-large-4 entry in ~/.vibe/config.toml
 # (adjust here if you rename that alias; do NOT add a duplicate [[models]] entry)
-active_model = "Mistral Large 4"
+active_model = "mistral4"
 instructions = "You are the chairman of an LLM council. You receive the original task, all stage-1 responses, and all stage-2 peer evaluations. Synthesize a single comprehensive final answer. In plan mode, commit to ONE plan with rejected alternatives. In review mode, start with exactly 'VERDICT: APPROVE' or 'VERDICT: CHANGES NEEDED' followed by the deduplicated issue list."
