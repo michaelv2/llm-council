@@ -1,0 +1,58 @@
+# LLM Council service configuration.
+# API keys are NEVER stored here — they are read from the environment
+# (see .env.example). key_env names the env var each provider needs.
+#
+# Model ids verified against the live APIs (see VERIFIED.md):
+#   Mistral: mistral-large-4, deepseek-v4-1-flash-1017, zai-glm-5-3, zai-glm-5-3-flash
+#   Ollama:  qwen3.8:27b-128k
+
+providers:
+  ollama:
+    # From the host, point at the qwen-lan Ollama. From the agentsafe
+    # container qwen-lan is unreachable, but llm-server:11434 serves the
+    # same models: http://llm-server:11434/v1
+    base_url: http://qwen-lan:11434/v1
+    timeout: 600                          # local inference is slow
+  mistral:
+    base_url: https://api.mistral.ai/v1
+    key_env: MISTRAL_API_KEY
+    # 300s: large reasoning models on big stage-3 prompts can exceed 120s
+    timeout: 300
+  # fireworks:
+  #   base_url: https://api.fireworks.ai/inference/v1
+  #   key_env: FIREWORKS_API_KEY
+  #   timeout: 120
+  # anthropic:
+  #   key_env: ANTHROPIC_API_KEY
+  #   max_tokens: 4096
+  #   timeout: 120
+
+councils:
+  # Planning / brainstorming council (council-plan, --council default).
+  # COLD path (runs periodically, latency tolerable): keep the local qwen
+  # for cross-family diversity and privacy. Cross-family diversity is the
+  # point: local qwen + hosted deepseek/glm.
+  default:
+    - {provider: ollama,  model: qwen3.8:27b-128k}
+    - {provider: mistral, model: deepseek-v4-1-flash-1017}
+    - {provider: mistral, model: zai-glm-5-3-flash}
+    - {provider: mistral, model: zai-glm-5-3}
+  # Review council (council-review, --council review).
+  # HOT path (runs every implement->review iteration): hosted flash models
+  # only. The local 27B takes minutes per call and asyncio.gather waits for
+  # the slowest entry, so it would gate EVERY stage of EVERY review run.
+  # HARD RULE: never add the implementer model here — a model grades its own
+  # output with less scrutiny (familiarity bias). See DESIGN.md.
+  # If a local seat is wanted in review anyway, use a SMALL local model
+  # (e.g. phi3:3.8b) or cap the entry's own timeout, e.g.
+  #   - {provider: ollama, model: qwen3.8:27b-128k, timeout: 120}
+  # so a slow call is skipped (stderr warning) instead of gating the run.
+  review:
+    - {provider: mistral, model: deepseek-v4-1-flash-1017}
+    - {provider: mistral, model: zai-glm-5-3-flash}
+
+chairmen:
+  # Main-loop chairman: the orchestrator model, holds the goal context.
+  default: {provider: mistral, model: mistral-large-4}
+  # Review chairman must NOT be the implementer (mistral-large-4).
+  review:  {provider: mistral, model: zai-glm-5-3}

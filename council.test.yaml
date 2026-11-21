@@ -1,0 +1,27 @@
+# Test config for running inside the agentsafe container, where qwen-lan is
+# unreachable but llm-server:11434 serves the same Ollama models.
+# Uses cheap models for smoke tests; the real council.yaml is for the host.
+
+providers:
+  ollama:
+    base_url: http://llm-server:11434/v1
+    timeout: 600
+  mistral:
+    base_url: https://api.mistral.ai/v1
+    key_env: MISTRAL_API_KEY
+    timeout: 300
+
+councils:
+  # fast smoke council: tiny local model + two flash models
+  smoke:
+    - {provider: ollama,  model: phi3:3.8b}
+    - {provider: mistral, model: deepseek-v4-1-flash-1017}
+    - {provider: mistral, model: zai-glm-5-3-flash}
+  # verifies the real local model + the real chairman id
+  qwen:
+    - {provider: ollama,  model: qwen3.8:27b-128k}
+    - {provider: mistral, model: zai-glm-5-3-flash}
+
+chairmen:
+  smoke: {provider: mistral, model: zai-glm-5-3-flash}
+  qwen:  {provider: mistral, model: mistral-large-4}
