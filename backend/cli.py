@@ -86,14 +86,18 @@ def main():
         help="named chairman (default: the council's own name if it exists, else 'default')",
     )
     p.add_argument("--config", default=None, help="path to council.yaml")
-    p.add_argument("--timeout", type=float, default=None, help="per-request timeout override (s)")
+    p.add_argument("--timeout", type=float, default=None,
+                   help="per-request timeout (s); overrides provider defaults, not a timeout set on an entry")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--no-angles", action="store_true",
                    help="plan mode: don't assign each seat an angle")
     args = p.parse_args()
 
     task = _read_task(args)
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"error: {e}")
     if args.council not in cfg.councils:
         raise SystemExit(f"error: no council named {args.council!r} in config")
     council = cfg.councils[args.council]

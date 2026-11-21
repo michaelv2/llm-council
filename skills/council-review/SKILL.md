@@ -57,6 +57,9 @@ context finds the bugs" effect.
 
 ## Gotchas
 
+- A reviewer whose reply is empty or lacks the `CHECKED:` line is counted
+  as failed (it shows in `failures`), so a silent seat can't pass for NO
+  ISSUES.
 - Results vary between runs (in one test, both reviewers answered NO ISSUES
   on a diff with real bugs). For important changes, run the review twice and
   combine the issue lists.

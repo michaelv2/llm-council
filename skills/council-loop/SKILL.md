@@ -28,8 +28,9 @@ Stage prompts are in `prompts.md` next to this file (mirrors
    one (append it to the system text):
    - plan mode: `council-qwen`, `council-deepseek`, `council-glm-flash` (one
      seat per model family)
-   - review mode: `council-deepseek`, `council-glm-flash` (hot path,
-     flash-only; **never the implementer's model**)
+   - review mode: `council-deepseek`, `council-glm-flash`, `council-qwen`
+     (three seats so each issue gets two peer votes; if qwen hasn't answered
+     after ~5 minutes, go on without it; **never the implementer's model**)
    Wait for all of them; collect each response.
 2. **Stage 2** — anonymize the responses as Response A, B, C... in a
    shuffled order (not the member order, to avoid position bias). Send each
@@ -39,7 +40,9 @@ Stage prompts are in `prompts.md` next to this file (mirrors
      heading = no vote); aggregate = average position per member.
    - review: number each issue line by its response label (A1, A2, B1, ...)
      before sending; members vote per id; count votes per issue, ignoring a
-     member's votes on its own issues; collect any `NEW |` issues.
+     member's votes on its own issues; collect any `NEW |` issues. Treat a
+     stage-1 reply with no `CHECKED:` line as a failed member, and skip
+     stage 2 when there are no issues or only one member answered.
 3. **Stage 3** — spawn the chairman (`chairman-large4` for plan,
    `review-chairman` for review) with the task + all stage-1 responses +
    all stage-2 evaluations (review: plus the issue list with vote counts).

@@ -57,8 +57,9 @@ uv run council "What is the capital of France?" --json
 - `providers.ollama.base_url`: `http://llm-server:11434/v1` (the default;
   works on the host and inside the agentsafe container).
 - **Never add the implementer model to `councils.review`** (see DESIGN.md).
-- Review council is intentionally flash-only (hot path); the local model
-  stays in the plan council (cold path). See DESIGN.md "cadence" rule.
+- Review council: deepseek-flash, glm-flash and local qwen (own `timeout: 300`,
+  so a slow qwen call is skipped rather than holding up the run). Three
+  seats give each issue two peer votes. See DESIGN.md "cadence" rule.
 
 ## CLI usage
 
@@ -82,6 +83,13 @@ council --mode plan --no-angles "..."   # plan without the random per-seat angle
 - `timings` in the JSON: seconds per stage plus every call (model, start
   offset, duration, ok).
 - API keys are checked only for the council and chairman a run uses.
+- A review reply that is empty or has no `CHECKED:` line counts as a failed
+  seat (listed in `failures`). Stage 2 is skipped when there is nothing to
+  cross-vote on (no issues, or a single surviving reviewer).
+- `--timeout` replaces provider default timeouts but not a `timeout:` set on
+  an entry (the capped qwen review seat, the 600s chairmen).
+- A council may not list the same provider/model twice (results are keyed
+  by it); config errors print one `error:` line.
 
 Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed;
 an empty task is rejected before any model is called. Failed models are

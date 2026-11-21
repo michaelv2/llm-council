@@ -26,6 +26,7 @@ Bug fixes vs. the web version:
 import asyncio
 import random
 import re
+import sys
 import time
 from collections import defaultdict
 from typing import Optional
@@ -186,18 +187,43 @@ If no real issues remain, return VERDICT: APPROVE with no list (but still the DR
 # --- parsing -------------------------------------------------------------------
 
 _SEVERITY = r"(blocker|major|minor|nit)"
+# a leading "|" allows markdown table rows ("| major | BUG | ... |")
 _ISSUE_RE = re.compile(
-    r"^\s*(?:[-*]|\d+[.)])?\s*\**" + _SEVERITY + r"\**\s*\|(.*)$", re.I | re.M
+    r"^[ \t]*\|?[ \t]*(?:[-*]|\d+[.)])?[ \t]*\**" + _SEVERITY + r"\**[ \t]*\|(.*)$", re.I | re.M
 )
-_NEW_RE = re.compile(r"^\s*(?:[-*]\s*)?\**NEW\**\s*\|\s*" + _SEVERITY + r"\s*\|(.*)$", re.I | re.M)
+_NEW_RE = re.compile(
+    r"^[ \t]*\|?[ \t]*(?:[-*][ \t]*)?\**NEW\**[ \t]*\|[ \t]*" + _SEVERITY + r"[ \t]*\|(.*)$",
+    re.I | re.M,
+)
 _VOTE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?\**([A-Z]\d+|N\d+)\**\s*[|:]\s*\**(REAL|FALSE POSITIVE|DUPLICATE)",
     re.I | re.M,
 )
 
 
+def _split_fields(rest: str, maxsplit: int) -> list[str]:
+    """Split on "|" outside `backtick` spans (evidence often quotes a shell
+    pipeline); unbalanced backticks fall back to a plain split."""
+    rest = rest.strip()
+    if rest.endswith("|"):  # markdown table row
+        rest = rest[:-1]
+    if rest.count("`") % 2:
+        return [p.strip() for p in rest.split("|", maxsplit)]
+    parts, current, in_code = [], [], False
+    for ch in rest:
+        if ch == "`":
+            in_code = not in_code
+        if ch == "|" and not in_code and len(parts) < maxsplit:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current).strip())
+    return parts
+
+
 def _issue_fields(severity: str, rest: str) -> dict:
-    parts = [p.strip() for p in rest.split("|", 4)]
+    parts = _split_fields(rest, 4)
     parts += [""] * (5 - len(parts))
     kind, location, description, evidence, check = parts
     return {
@@ -234,20 +260,22 @@ def parse_votes(text: str) -> dict[str, str]:
     return {m.group(1).upper(): m.group(2).upper() for m in _VOTE_RE.finditer(text)}
 
 
-_DROPPED_LINE_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?\**([A-Z]\d+|N\d+)\**\s*\|\s*([^|]+?)\s*\|\s*(.*?)\s*$", re.M
-)
+_DROPPED_LINE_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?\**([A-Za-z]\d+)\**[ \t]*\|(.*)$")
 
 
 def parse_dropped(synthesis: str) -> list[dict]:
-    """The chairman's DROPPED: section -> [{id, verdict, reason}]."""
+    """The chairman's DROPPED: section -> [{id, verdict, reason}] (reason may be empty)."""
     if not isinstance(synthesis, str) or "DROPPED:" not in synthesis:
         return []
     section = synthesis.rsplit("DROPPED:", 1)[1].split("UNCHECKED:", 1)[0]
-    return [
-        {"id": m.group(1).upper(), "verdict": m.group(2).upper(), "reason": m.group(3)}
-        for m in _DROPPED_LINE_RE.finditer(section)
-    ]
+    dropped = []
+    for line in section.splitlines():  # one entry per line, never across lines
+        m = _DROPPED_LINE_RE.match(line)
+        if m:
+            verdict, _, reason = m.group(2).partition("|")
+            dropped.append({"id": m.group(1).upper(), "verdict": verdict.strip().upper(),
+                            "reason": reason.strip()})
+    return dropped
 
 
 def parse_ranking_from_text(ranking_text: str) -> list[str]:
@@ -328,11 +356,21 @@ async def stage1_collect_responses(
 
     out = []
     for name, r in responses.items():
-        if r is not None:
-            item = {"model": name, "response": r.get("content") or ""}
-            if roles and name in roles:
-                item["role"] = roles[name]
-            out.append(item)
+        if r is None:
+            continue
+        content = r.get("content") or ""
+        if not content.strip():
+            print(f"[council] {name} returned an empty response; counted as failed", file=sys.stderr)
+            continue
+        if mode == "review" and "CHECKED:" not in content:
+            # the format requires a CHECKED: line first; without it the reply
+            # is not a review (and NO ISSUES from it would mean nothing)
+            print(f"[council] {name} reply has no CHECKED: line; counted as failed", file=sys.stderr)
+            continue
+        item = {"model": name, "response": content}
+        if roles and name in roles:
+            item["role"] = roles[name]
+        out.append(item)
     return out
 
 
@@ -376,6 +414,11 @@ async def stage2_collect_rankings(
     # Bug fix: only models that succeeded in stage 1 participate in stage 2.
     succeeded = {r["model"] for r in stage1_results}
     voters = [e for e in council if e.name in succeeded]
+
+    # Review: votes on one's own issues are ignored, so with no issues or a
+    # single reviewer there is nothing to vote on; skip the (slow) stage.
+    if mode == "review" and (not issues or len(voters) < 2):
+        return [], label_to_model, tally_votes(issues, [])
 
     responses = await registry.query_parallel(voters, messages, timeout)
 

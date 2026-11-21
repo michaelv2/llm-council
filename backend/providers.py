@@ -70,6 +70,7 @@ class ModelEntry:
     key: str = ""
     key_env: str = ""        # env var the key came from (for check_keys)
     timeout: float = 120.0
+    timeout_pinned: bool = False  # set on the entry itself: --timeout doesn't override it
     max_tokens: int = 4096   # required by the Anthropic API
 
     @property
@@ -94,7 +95,10 @@ class ProviderRegistry:
         messages: list[dict],
         timeout: Optional[float] = None,
     ) -> Optional[dict]:
-        timeout = timeout if timeout is not None else entry.timeout
+        # a run-wide override (--timeout) replaces provider defaults, but not a
+        # timeout set on the entry itself (e.g. the capped local review seat)
+        if timeout is None or entry.timeout_pinned:
+            timeout = entry.timeout
         start = time.monotonic()
         result = await self._query_with_retry(entry, messages, timeout)
         self.calls.append({

@@ -36,18 +36,20 @@ councils:
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
     - {provider: mistral, model: zai-glm-5-3-flash}
   # Review council (council-review, --council review).
-  # HOT path (runs every implement->review iteration): hosted flash models
-  # only. The local 27B takes minutes per call and asyncio.gather waits for
-  # the slowest entry, so it would gate EVERY stage of EVERY review run.
+  # HOT path (runs every implement->review iteration). Three seats so each
+  # issue gets two peer votes (with two seats, one vote decided every issue),
+  # and three model families. Each stage waits for the slowest seat: measured
+  # 2026-11-21, glm-flash took 93-136s per stage and local qwen 100-170s
+  # (deepseek under 15s), so qwen's own 300s timeout caps how long it can
+  # hold up a stage; a slower call is skipped with a stderr warning and shows
+  # up in "failures". Ollama serves qwen one request at a time, so parallel
+  # council runs queue on it.
   # HARD RULE: never add the implementer model here — a model grades its own
   # output with less scrutiny (familiarity bias). See DESIGN.md.
-  # If a local seat is wanted in review anyway, use a SMALL local model
-  # (e.g. phi3:3.8b) or cap the entry's own timeout, e.g.
-  #   - {provider: ollama, model: qwen3.8:27b-128k, timeout: 120}
-  # so a slow call is skipped (stderr warning) instead of gating the run.
   review:
     - {provider: mistral, model: deepseek-v4-1-flash-1017}
     - {provider: mistral, model: zai-glm-5-3-flash}
+    - {provider: ollama,  model: qwen3.8:27b-128k, timeout: 300}
 
 # Models that write the code under review. `council --mode review` refuses
 # any seat or chairman listed here (a model grades its own output with less
@@ -57,8 +59,10 @@ implementers:
 
 chairmen:
   # Main-loop chairman: the orchestrator model, holds the goal context.
-  default: {provider: mistral, model: mistral-large-4}
+  # Chairmen get 600s: they read every report (mistral-large-4 took 201s and
+  # glm-5-3 181s of the old 300s), and a chairman timeout fails the whole run.
+  default: {provider: mistral, model: mistral-large-4, timeout: 600}
   # Review chairman must NOT be the implementer (mistral-large-4).
   # glm-5-3 costs ~$0.02 of a ~$0.03 review run; switch to zai-glm-5-3-flash
   # if review volume is high.
-  review:  {provider: mistral, model: zai-glm-5-3}
+  review:  {provider: mistral, model: zai-glm-5-3, timeout: 600}

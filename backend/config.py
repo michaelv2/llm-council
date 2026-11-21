@@ -41,7 +41,9 @@ class CouncilConfig:
     implementers: set[str] = field(default_factory=set)  # entry names, "provider/model"
 
 
-def _entry(raw: dict, providers: dict) -> ModelEntry:
+def _entry(raw: dict, providers: dict, where: str) -> ModelEntry:
+    if not isinstance(raw, dict) or "provider" not in raw or "model" not in raw:
+        raise ValueError(f"{where}: each entry needs provider and model, got {raw!r}")
     provider = raw["provider"]
     pconf = dict(providers.get(provider, {}))
     key_env = pconf.pop("key_env", "") or ""
@@ -62,6 +64,7 @@ def _entry(raw: dict, providers: dict) -> ModelEntry:
         key=key,
         key_env=key_env,
         timeout=timeout,
+        timeout_pinned="timeout" in raw,
         max_tokens=max_tokens,
     )
 
@@ -85,18 +88,34 @@ def load_config(path: str | None = None) -> CouncilConfig:
             f"COUNCIL_CONFIG, or run from the repo root (council.yaml)"
         )
     with open(path) as f:
-        raw = yaml.safe_load(f)
-    providers = raw.get("providers", {})
-    councils = {
-        name: [_entry(e, providers) for e in entries]
-        for name, entries in raw.get("councils", {}).items()
-    }
+        try:
+            raw = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ValueError(f"{path}: not valid YAML: {e}") from e
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected a mapping with providers/councils/chairmen")
+    providers = raw.get("providers") or {}
+    councils = {}
+    for name, entries in (raw.get("councils") or {}).items():
+        seats = [_entry(e, providers, f"{path}: councils.{name}") for e in entries or []]
+        names = [s.name for s in seats]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            # results are keyed by provider/model, so a repeated seat would
+            # silently collapse into one
+            raise ValueError(
+                f"{path}: council {name!r} lists {', '.join(dupes)} more than once; seats must be distinct"
+            )
+        councils[name] = seats
     chairmen = {
-        name: _entry(e, providers) for name, e in raw.get("chairmen", {}).items()
+        name: _entry(e, providers, f"{path}: chairmen.{name}")
+        for name, e in (raw.get("chairmen") or {}).items()
     }
-    implementers = {
-        f"{e['provider']}/{e['model']}" for e in raw.get("implementers", []) or []
-    }
+    implementers = set()
+    for e in raw.get("implementers") or []:
+        if not isinstance(e, dict) or "provider" not in e or "model" not in e:
+            raise ValueError(f"{path}: each implementers entry needs provider and model, got {e!r}")
+        implementers.add(f"{e['provider']}/{e['model']}")
     if not councils:
         raise ValueError(f"{path}: no councils defined")
     return CouncilConfig(

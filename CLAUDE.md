@@ -35,6 +35,10 @@ LLM Council is a 3-stage deliberation system where multiple LLMs answer a task, 
 - `--json` output includes `failures` (failed council seats, and the chairman as `"<name> (chairman)"`)
 - Exit code 1 if all stage-1 models failed or the chairman failed, else 0
 - Review mode refuses any seat or chairman listed under `implementers`; `--no-angles` turns off plan angles
+- Stage 1 drops empty replies, and in review mode replies without a `CHECKED:` line, as failed seats; review stage 2 is skipped when no issue has a non-author voter
+- `--timeout` overrides provider defaults only; an entry's own `timeout:` is pinned (`ModelEntry.timeout_pinned`)
+- Config errors (missing/invalid file, entries without provider/model, duplicate seats in a council) raise ValueError/OSError, which the CLI turns into one `error:` line
+- Issue lines may be markdown table rows; fields are split on `|` outside backticks (`_split_fields`)
 - `--json` also has `roles` (plan), `issues` (review) and `timings` (per stage, plus each call)
 
 ### Vibe integration
@@ -46,7 +50,7 @@ Kept from upstream (React + Vite) but unused: it expects the removed FastAPI bac
 
 ## Key Design Decisions
 
-- **Councils per cadence** (`council.yaml`): the plan council (cold path) includes the slow local model; the review council (hot path) is hosted flash models only, since `asyncio.gather` waits for the slowest seat.
+- **Councils per cadence** (`council.yaml`): both include the local qwen model; the review council (hot path) caps it with its own `timeout: 300`, since `asyncio.gather` waits for the slowest seat. Three review seats give each issue two peer votes.
 - **Never put the implementer model on the review council**, not even as chairman (familiarity bias). See DESIGN.md.
 - **Ollama address**: `http://llm-server:11434/v1`, the same on the host and in the agentsafe container. `qwen-lan` does not resolve.
 - **Anonymized peer review**: models see only "Response X" labels; the chairman and the output see model names.

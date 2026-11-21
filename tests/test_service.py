@@ -190,6 +190,62 @@ def test_key_is_never_read_from_the_yaml(tmp_path):
     assert load_config(str(path)).councils["c"][0].key == ""
 
 
+def test_duplicate_seat_is_rejected(tmp_path):
+    path = tmp_path / "council.yaml"
+    path.write_text(json.dumps({
+        "providers": {"ollama": {"base_url": "http://x/v1"}},
+        "councils": {"c": [{"provider": "ollama", "model": "m"}, {"provider": "ollama", "model": "m"}]},
+    }))
+    with pytest.raises(ValueError, match="more than once"):
+        load_config(str(path))
+
+
+@pytest.mark.parametrize("content, message", [
+    ("", "expected a mapping"),
+    ("councils: [unclosed", "not valid YAML"),
+    (json.dumps({"providers": {"o": {"base_url": "http://x"}},
+                 "councils": {"c": [{"provider": "o", "model": "m"}]},
+                 "implementers": [{"provider": "o"}]}), "implementers entry needs"),
+    (json.dumps({"councils": {"c": [{"model": "m"}]}}), "needs provider and model"),
+])
+def test_bad_config_gives_a_one_line_cli_error(tmp_path, monkeypatch, content, message):
+    path = tmp_path / "council.yaml"
+    path.write_text(content)
+    monkeypatch.setattr(sys, "argv", ["council", "task", "--config", str(path)])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert str(exc.value.code).startswith("error: ") and message in str(exc.value.code)
+
+
+def test_missing_config_gives_a_one_line_cli_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["council", "task", "--config", str(tmp_path / "nope.yaml")])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert str(exc.value.code).startswith("error: council config not found")
+
+
+def test_entry_timeout_is_not_overridden_by_run_timeout(tmp_path, monkeypatch):
+    path = tmp_path / "council.yaml"
+    path.write_text(json.dumps({
+        "providers": {"ollama": {"base_url": "http://x/v1", "timeout": 600}},
+        "councils": {"c": [{"provider": "ollama", "model": "capped", "timeout": 300},
+                           {"provider": "ollama", "model": "default"}]},
+    }))
+    capped, default = load_config(str(path)).councils["c"]
+    assert capped.timeout_pinned and not default.timeout_pinned
+    seen = {}
+
+    async def fake_retry(self, entry, messages, timeout):
+        seen[entry.model] = timeout
+        return {"content": "ok"}
+
+    monkeypatch.setattr(ProviderRegistry, "_query_with_retry", fake_retry)
+    registry = ProviderRegistry([capped, default])
+    for e in (capped, default):
+        asyncio.run(registry.query(e, [], timeout=900))
+    assert seen == {"capped": 300, "default": 900}
+
+
 def test_anthropic_base_url_default_and_override(tmp_path):
     path = tmp_path / "council.yaml"
     path.write_text(json.dumps({
@@ -332,6 +388,51 @@ def test_parse_issues_fields_and_kinds():
     assert issues[1]["evidence"] == 'criterion: "reject empty input"'
     assert parse_issues(REVIEW_B, "B")[0]["severity"] == "nit"  # bulleted line
     assert parse_issues("CHECKED: everything\nNO ISSUES", "C") == []
+
+
+def test_parse_issues_markdown_table_rows():
+    text = ("CHECKED: x\n| SEVERITY | KIND | LOCATION | description | evidence | check |\n"
+            "|---|---|---|---|---|---|\n| major | BUG | cli.py:1 | d | `e` | c |")
+    [issue] = parse_issues(text, "A")
+    assert (issue["kind"], issue["location"], issue["check"]) == ("BUG", "cli.py:1", "c")
+
+
+def test_parse_issues_pipe_inside_backticks():
+    [issue] = parse_issues(
+        "major | BUG | cli.py:9 | pipe in evidence | `printf '' | council` | `a | b` run", "A")
+    assert issue["evidence"] == "`printf '' | council`"
+    assert issue["check"] == "`a | b` run"
+
+
+def test_parse_dropped_line_without_reason_stays_one_entry():
+    assert parse_dropped("DROPPED:\nA2 | FALSE POSITIVE\nB1 | DUPLICATE of A1 | same") == [
+        {"id": "A2", "verdict": "FALSE POSITIVE", "reason": ""},
+        {"id": "B1", "verdict": "DUPLICATE OF A1", "reason": "same"},
+    ]
+
+
+def test_review_empty_or_unformatted_reviewer_counts_as_failed(monkeypatch, capsys):
+    council, chair = _entries()
+    code, out = _run_cli(monkeypatch, capsys, {
+        "ollama/a": "", "mistral/b": "looks fine to me", "mistral/c": "CHECKED: all\nNO ISSUES",
+        "mistral/chair": "VERDICT: APPROVE",
+    }, ["diff", "--mode", "review", "--json"])
+    assert json.loads(out)["failures"] == ["ollama/a", "mistral/b"]
+
+
+def test_review_skips_stage2_when_nothing_to_vote_on():
+    council, chair = _entries()
+    registry = FakeRegistry({e.name: "CHECKED: all\nNO ISSUES" for e in council}
+                            | {"mistral/chair": "VERDICT: APPROVE"})
+    _, stage2, _, meta = asyncio.run(run_full_council("r", registry, council, chair, mode="review"))
+    assert stage2 == [] and meta["issues"] == []
+    assert len(registry.calls) == 2  # stage 1 + chairman, no stage 2
+    # a single reviewer: its votes on its own issues would be ignored anyway
+    registry = FakeRegistry({"ollama/a": REVIEW_A, "mistral/b": None, "mistral/c": None,
+                             "mistral/chair": "VERDICT: CHANGES NEEDED"})
+    _, stage2, _, meta = asyncio.run(run_full_council("r", registry, council, chair, mode="review"))
+    assert stage2 == [] and len(meta["issues"]) == 2
+    assert all(i["votes"]["REAL"] == 0 for i in meta["issues"])
 
 
 def test_parse_votes():
@@ -493,9 +594,9 @@ def test_run_full_council_all_fail_degenerate():
 def test_run_full_council_review_mode_verdict():
     council, chair = _entries()
     registry = FakeRegistry({
-        "ollama/a": "NO ISSUES",
-        "mistral/b": "major | f.py:10 | bug | `x = 1`",
-        "mistral/c": "NO ISSUES",
+        "ollama/a": "CHECKED: f.py\nNO ISSUES",
+        "mistral/b": "CHECKED: f.py\nmajor | BUG | f.py:10 | bug | `x = 1` | none",
+        "mistral/c": "CHECKED: f.py\nNO ISSUES",
         "mistral/chair": "VERDICT: CHANGES NEEDED\nmajor | f.py:10 | bug | `x = 1`",
     })
     stage1, stage2, stage3, meta = asyncio.run(

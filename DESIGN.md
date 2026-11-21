@@ -24,7 +24,7 @@ This file is the durable record; code lives alongside it in this bundle.
 | Main-loop orchestrator / plan chairman | mistral-large-4 | Open-ended loop needs broad judgment ("is this finding worth notifying?") + large context; small models lose the thread under compaction. |
 | Implementer ("doer") | mistral-large-4, fresh context per task | koderz lesson: intelligence must live with the agent doing the work, or the large model rewrites a small model's output token-by-token. |
 | council-plan reviewers (COLD path) | qwen3.8:27b-128k (local) + deepseek-v4-1-flash-1017 + zai-glm-5-3-flash (Mistral) | One seat per model family. Vendor surface kept to Mistral + local Ollama only (Fireworks/minimax-m3 was tried and removed); glm-5-3 full stays out of members on cost ($1.40/$4.40 per 1M) and remains review chairman. Local model kept because plan runs are periodic and latency is tolerable. |
-| council-review reviewers (HOT path) | deepseek-v4-1-flash-1017 + zai-glm-5-3-flash only | Review runs every iteration; the local 27B takes minutes per call and `asyncio.gather` waits for the slowest entry, so it would gate every stage of every run. Flash-only = seconds. (Optional local seat: small model like phi3:3.8b, or per-entry `timeout: 120` so a slow call is skipped, not gating.) |
+| council-review reviewers (HOT path) | deepseek-v4-1-flash-1017 + zai-glm-5-3-flash + qwen3.8:27b-128k (`timeout: 300`) | Review runs every iteration and `asyncio.gather` waits for the slowest entry. Originally flash-only; measured 2026-11-21, glm-flash already took 93-136s per stage and local qwen 100-170s, so qwen costs little extra, while a third seat gives each issue two peer votes (with two seats, one vote decided every issue and got a real bug wrong). The 300s cap skips a slow qwen call instead of gating the run. |
 | council-review chairman | zai-glm-5-3 | **Must not be the implementer.** |
 
 ## Hard rules
@@ -96,8 +96,8 @@ successes) + 1 chairman.
   with it). httpx2==2.16.2 (pydantic's official continuation, rename-only
   breaking change) is the drop-in future option: one-line import swap +
   `httpx2>=2.16` + `requires-python>=3.11`.
-- **Local model out of the review council** (hot path), kept in the plan
-  council (cold path) — latency gates every stage via gather.
+- **Local model in the review council since 2026-11-21**, with its own 300s
+  timeout (see the table above); originally kept out for latency.
 - Ollama base URL: `http://llm-server:11434/v1`, on the host and inside the
   agentsafe container alike (`qwen-lan` never resolved).
 - **Plan angles**: each run randomly gives the plan seats different angles
