@@ -46,7 +46,16 @@ task — max 2 iterations, then escalate to the user.
 ## Gotchas
 
 - Everything flows through this session's context — the loop costs more
-  parent-context tokens than the CLI variant. For big diffs, prefer the CLI.
+  parent-context tokens than the CLI variant. Parent context grows by roughly
+  (N+1)*D + N*N*R (N = members, D = artifact tokens, R = avg response tokens),
+  so the cost is quadratic in council size. Sizing rule: keep the loop for
+  artifacts up to ~15-20k tokens (~60-80 KB diff) with 3-4 members; beyond
+  that use the CLI variant (`council --json > out.json`, read only the
+  verdict). Regardless of variant, chunk reviews per-file/per-commit once an
+  artifact exceeds a single reviewer's context window (~30-50k tokens), and
+  exclude generated files/lockfiles. Warning signs: context gauge past ~50-60%
+  mid-review, compaction firing during the loop, reviewers reporting a
+  truncated diff.
 - Subagent instructions are capped at 65,536 chars; approvals apply
   session-wide.
 - If a member fails or hangs, proceed with the responses you have (the
