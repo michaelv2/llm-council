@@ -59,7 +59,8 @@ context finds the bugs" effect.
 
 - A reviewer whose reply is empty or lacks the `CHECKED:` line is counted
   as failed (it shows in `failures`), so a silent seat can't pass for NO
-  ISSUES.
+  ISSUES. `name (stage 2)` in `failures` means that seat's votes are
+  missing, so its peers' issues rest on fewer votes.
 - Results vary between runs (in one test, both reviewers answered NO ISSUES
   on a diff with real bugs). For important changes, run the review twice and
   combine the issue lists.

@@ -146,6 +146,8 @@ CHAIRMAN SYNTHESIS:
 FAILURES: <list of models that failed any stage, if any>
 ```
 
+- (Implemented for answer mode only: plan mode's ranking mostly reflects the randomly
+  assigned angle, and review mode has no ranking, so `recommended` is empty there.)
 - The "recommended solution" falls out for free: `aggregate_rankings[0]` → de-anonymize via
   `label_to_model` → pull that model's stage-1 text. No new pipeline logic.
 - `--json` shape:

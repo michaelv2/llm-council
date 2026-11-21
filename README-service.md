@@ -89,7 +89,14 @@ council --mode plan --no-angles "..."   # plan without the random per-seat angle
 - `--timeout` replaces provider default timeouts but not a `timeout:` set on
   an entry (the capped qwen review seat, the 600s chairmen).
 - A council may not list the same provider/model twice (results are keyed
-  by it); config errors print one `error:` line.
+  by it), must have 1-26 seats (labels A-Z); config errors print one
+  `error:` line naming the file and entry.
+- `failures` covers every stage: `name (stage 2)` for a seat that answered
+  but failed its stage-2 call, `name (chairman)` for the chairman.
+- **answer** mode: `recommended` (and the digest's RECOMMENDED SOLUTION
+  section) holds the best-ranked model's stage-1 response, every model on a
+  tie. Empty in plan mode (the ranking mostly reflects the assigned angle)
+  and review mode (no ranking).
 
 Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed;
 an empty task is rejected before any model is called. Failed models are

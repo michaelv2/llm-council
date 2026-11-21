@@ -39,7 +39,9 @@ LLM Council is a 3-stage deliberation system where multiple LLMs answer a task, 
 - `--timeout` overrides provider defaults only; an entry's own `timeout:` is pinned (`ModelEntry.timeout_pinned`)
 - Config errors (missing/invalid file, entries without provider/model, duplicate seats in a council) raise ValueError/OSError, which the CLI turns into one `error:` line
 - Issue lines may be markdown table rows; fields are split on `|` outside backticks (`_split_fields`)
-- `--json` also has `roles` (plan), `issues` (review) and `timings` (per stage, plus each call)
+- `--json` also has `roles` (plan), `issues` (review), `recommended` (answer mode: best-ranked stage-1 response(s), `recommended_responses()`) and `timings` (per stage, plus each call)
+- `failures` includes stage-2 failures (`stage2_collect_rankings` returns them as its 4th value) as `name (stage 2)`
+- Stage-2 NEW issue ids are `NEW1, NEW2, ...` (stage-1 ids are label + number, e.g. `A1`); councils are capped at 26 seats; the `CHECKED:` check is case-insensitive
 
 ### Vibe integration
 - `skills/` (council-plan, council-review, council-loop) and `agents/*.toml` are deployed by copying to `~/.vibe/skills/` and `~/.vibe/agents/`; `config.snippet.toml` lists the providers and model aliases the agents expect (`mistral4`, `deepseek-flash`, `glm-flash`, `glm`, `qwen-local`)

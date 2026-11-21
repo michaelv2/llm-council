@@ -198,8 +198,9 @@ _NEW_RE = re.compile(
     r"^[ \t]*\|?[ \t]*(?:[-*][ \t]*)?\**NEW\**[ \t]*\|[ \t]*" + _SEVERITY + r"[ \t]*\|(.*)$",
     re.I | re.M,
 )
+# votes are cast on stage-1 ids (A1, B2, ...); NEW issues (NEW1, ...) are unvoted
 _VOTE_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?\**([A-Z]\d+|N\d+)\**\s*[|:]\s*\**(REAL|FALSE POSITIVE|DUPLICATE)",
+    r"^\s*(?:[-*]\s*)?\**([A-Z]\d+)\**\s*[|:]\s*\**(REAL|FALSE POSITIVE|DUPLICATE)",
     re.I | re.M,
 )
 
@@ -223,6 +224,10 @@ def _split_fields(rest: str, maxsplit: int) -> list[str]:
             current.append(ch)
     parts.append("".join(current).strip())
     return parts
+
+
+# the required first line of a review; case and light markdown are tolerated
+_CHECKED_RE = re.compile(r"^[ \t>*_#-]*checked[ \t*_]*:", re.I | re.M)
 
 
 def _issue_fields(severity: str, rest: str) -> dict:
@@ -263,7 +268,7 @@ def parse_votes(text: str) -> dict[str, str]:
     return {m.group(1).upper(): m.group(2).upper() for m in _VOTE_RE.finditer(text)}
 
 
-_DROPPED_LINE_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?\**([A-Za-z]\d+)\**[ \t]*\|(.*)$")
+_DROPPED_LINE_RE = re.compile(r"^[ \t]*(?:[-*][ \t]*)?\**(NEW\d+|[A-Za-z]\d+)\**[ \t]*\|(.*)$", re.I)
 
 
 def parse_dropped(synthesis: str) -> list[dict]:
@@ -365,7 +370,7 @@ async def stage1_collect_responses(
         if not content.strip():
             print(f"[council] {name} returned an empty response; counted as failed", file=sys.stderr)
             continue
-        if mode == "review" and "CHECKED:" not in content:
+        if mode == "review" and not _CHECKED_RE.search(content):
             # the format requires a CHECKED: line first; without it the reply
             # is not a review (and NO ISSUES from it would mean nothing)
             print(f"[council] {name} reply has no CHECKED: line; counted as failed", file=sys.stderr)
@@ -390,7 +395,8 @@ async def stage2_collect_rankings(
 
     The responses are shown in a shuffled order (pass rng to make it reproducible),
     so no seat systematically benefits from being read first. Returns
-    (stage2_results, label_to_model, issues); issues is [] outside review mode.
+    (stage2_results, label_to_model, issues, failed); issues is [] outside
+    review mode, failed lists the voters whose stage-2 call failed.
     """
     shuffled = list(stage1_results)
     (rng or random).shuffle(shuffled)
@@ -421,7 +427,7 @@ async def stage2_collect_rankings(
     # Review: votes on one's own issues are ignored, so with no issues or a
     # single reviewer there is nothing to vote on; skip the (slow) stage.
     if mode == "review" and (not issues or len(voters) < 2):
-        return [], label_to_model, tally_votes(issues, [])
+        return [], label_to_model, tally_votes(issues, []), []
 
     responses = await registry.query_parallel(voters, messages, timeout)
 
@@ -440,7 +446,9 @@ async def stage2_collect_rankings(
 
     if mode == "review":
         issues = tally_votes(issues, stage2_results)
-    return stage2_results, label_to_model, issues
+    answered = {r["model"] for r in stage2_results}
+    failed = [e.name for e in voters if e.name not in answered]
+    return stage2_results, label_to_model, issues, failed
 
 
 def tally_votes(issues: list[dict], stage2_results: list[dict]) -> list[dict]:
@@ -460,7 +468,8 @@ def tally_votes(issues: list[dict], stage2_results: list[dict]) -> list[dict]:
     for r in stage2_results:
         for new in parse_new_issues(r["ranking"]):
             n += 1
-            tallied.append({"id": f"N{n}", **new, "reviewer": r["model"]})
+            # "NEW" prefix: can't collide with a stage-1 label (A-Z) + number
+            tallied.append({"id": f"NEW{n}", **new, "reviewer": r["model"]})
     return tallied
 
 
@@ -507,6 +516,16 @@ async def stage3_synthesize_final(
     return {"model": chairman.name, "response": content}
 
 
+def recommended_responses(stage1_results: list[dict], aggregate: list[dict]) -> list[dict]:
+    """Stage-1 responses of the best-ranked model(s) (all of them on a tie)."""
+    if not aggregate:
+        return []
+    best = aggregate[0]["average_rank"]
+    top = [a["model"] for a in aggregate if a["average_rank"] == best]
+    by_model = {r["model"]: r["response"] for r in stage1_results}
+    return [{"model": m, "response": by_model[m]} for m in top if m in by_model]
+
+
 def calculate_aggregate_rankings(
     stage2_results: list[dict],
     label_to_model: dict[str, str],
@@ -548,6 +567,8 @@ async def run_full_council(
     has the mode, label_to_model, aggregate_rankings, issues (review), roles
     (plan) and per-stage wall-clock timings.
     """
+    if len(council) > 26:
+        raise ValueError(f"at most 26 council seats (responses are labelled A-Z), got {len(council)}")
     roles = assign_angles(council, rng) if (mode == "plan" and angles) else {}
     timings = {}
     t = time.monotonic()
@@ -562,10 +583,11 @@ async def run_full_council(
             "response": "All models failed to respond. Please try again.",
             "failed": True,
         }, {"mode": mode, "label_to_model": {}, "aggregate_rankings": [],
-            "issues": [], "roles": roles, "timings": timings}
+            "issues": [], "roles": roles, "timings": timings,
+            "stage2_failed": [], "recommended": []}
 
     t = time.monotonic()
-    stage2_results, label_to_model, issues = await stage2_collect_rankings(
+    stage2_results, label_to_model, issues, stage2_failed = await stage2_collect_rankings(
         registry, council, task, stage1_results, mode, timeout, rng
     )
     timings["stage2_s"] = round(time.monotonic() - t, 1)
@@ -584,6 +606,11 @@ async def run_full_council(
         "issues": issues,
         "roles": roles,
         "timings": timings,
+        "stage2_failed": stage2_failed,
+        # answer mode only: in plan mode the ranking mostly reflects the
+        # assigned angle, and review mode has no ranking
+        "recommended": recommended_responses(stage1_results, aggregate_rankings)
+        if mode == "answer" else [],
     }
     if mode == "review":
         # the chairman's DROPPED: section, so a discarded true issue stays visible

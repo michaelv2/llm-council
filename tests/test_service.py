@@ -57,6 +57,12 @@ def test_message_content_mistral_reasoning_parts():
     assert reasoning == ["let me think"]
 
 
+def test_message_content_null_thinking_block():
+    # a thinking part whose "thinking" is null must not drop the whole response
+    message = {"content": [{"type": "thinking", "thinking": None}, {"type": "text", "text": "OK"}]}
+    assert _message_content(message) == ("OK", None)
+
+
 def test_message_content_degenerate():
     assert _message_content({"content": None}) == ("", None)
     assert _message_content({}) == ("", None)
@@ -207,6 +213,17 @@ def test_duplicate_seat_is_rejected(tmp_path):
                  "councils": {"c": [{"provider": "o", "model": "m"}]},
                  "implementers": [{"provider": "o"}]}), "implementers entry needs"),
     (json.dumps({"councils": {"c": [{"model": "m"}]}}), "needs provider and model"),
+    (json.dumps({"providers": {"o": {"base_url": "http://x"}}, "councils": {"c": []}}),
+     "must be a non-empty list"),
+    (json.dumps({"councils": ["a", "b"]}), "councils must be a mapping"),
+    (json.dumps({"providers": ["x"], "councils": {"c": [{"provider": "o", "model": "m"}]}}),
+     "providers must be a mapping"),
+    (json.dumps({"providers": {"o": {"base_url": "http://x"}},
+                 "councils": {"c": [{"provider": "o", "model": "m", "timeout": "abc"}]}}),
+     "councils.c: timeout and max_tokens must be numbers"),
+    (json.dumps({"providers": {"o": {"base_url": "http://x"}},
+                 "councils": {"c": [{"provider": "o", "model": f"m{i}"} for i in range(27)]}}),
+     "at most 26"),
 ])
 def test_bad_config_gives_a_one_line_cli_error(tmp_path, monkeypatch, content, message):
     path = tmp_path / "council.yaml"
@@ -355,7 +372,7 @@ def test_stage2_labels_are_shuffled():
     firsts = set()
     for seed in range(20):
         registry = FakeRegistry({})
-        _, label_to_model, _ = asyncio.run(stage2_collect_rankings(
+        _, label_to_model, _, _ = asyncio.run(stage2_collect_rankings(
             registry, council, "t", stage1, rng=random.Random(seed)
         ))
         assert sorted(label_to_model.values()) == sorted(e.name for e in council)
@@ -462,7 +479,7 @@ def test_review_mode_votes_exclude_self_and_reach_the_chairman():
     # a's two issues get only b's vote, b's issue only a's vote
     assert all(i["votes"]["REAL"] == 1 for i in issues if "votes" in i)
     assert len(by_reviewer["ollama/a"]) == 3  # 2 stage-1 issues + 1 NEW
-    assert [i["id"] for i in issues if "votes" not in i] == ["N1"]
+    assert [i["id"] for i in issues if "votes" not in i] == ["NEW1"]
     assert meta["aggregate_rankings"] == []  # no peer ranking in review mode
     chair_prompt = registry.messages["mistral/chair"][-1][0]["content"]
     assert "[votes: REAL 1, FALSE POSITIVE 0, DUPLICATE 0]" in chair_prompt
@@ -694,3 +711,63 @@ def test_cli_implementer_may_chair_outside_review(monkeypatch, capsys):
         "ollama/a": "A", "mistral/b": "B", "mistral/c": "C", "mistral/chair": "s",
     }, ["task", "--json"], implementers=["mistral/chair"])
     assert code == 0 and "timings" in json.loads(out)
+
+
+def test_new_issue_ids_never_collide_with_stage1_ids():
+    # with 14 seats the 14th label is "N", whose issues used to be N1.. like NEW ones
+    seats = [ModelEntry("mistral", f"m{i}") for i in range(14)]
+    chair = ModelEntry("mistral", "chair")
+    review = "CHECKED: x\nmajor | BUG | f.py:1 | d | `e` | c"
+    registry = FakeRegistry({e.name: [review, "NEW | minor | BUG | g.py:2 | new | `x` | none"]
+                             for e in seats} | {"mistral/chair": "VERDICT: APPROVE"})
+    _, _, _, meta = asyncio.run(run_full_council("r", registry, seats, chair, mode="review"))
+    ids = [i["id"] for i in meta["issues"]]
+    assert len(ids) == len(set(ids))
+    assert "NEW1" in ids and "N1" in ids
+
+
+def test_dropped_accepts_new_ids():
+    assert parse_dropped("DROPPED:\nNEW1 | NOT CONFIRMED | no evidence")[0]["id"] == "NEW1"
+
+
+def test_checked_line_is_case_insensitive():
+    council, chair = _entries()
+    registry = FakeRegistry({"ollama/a": "Checked: cli\nNO ISSUES", "mistral/b": "**checked:** x\nNO ISSUES",
+                             "mistral/c": "no header here", "mistral/chair": "VERDICT: APPROVE"})
+    stage1, _, _, _ = asyncio.run(run_full_council("r", registry, council, chair, mode="review"))
+    assert {r["model"] for r in stage1} == {"ollama/a", "mistral/b"}
+
+
+def test_cli_lists_stage2_failures(monkeypatch, capsys):
+    code, out = _run_cli(monkeypatch, capsys, {
+        "ollama/a": ["A", None],  # answers stage 1, fails stage 2
+        "mistral/b": ["B", "FINAL RANKING:\n1. Response A"],
+        "mistral/c": ["C", "FINAL RANKING:\n1. Response B"],
+        "mistral/chair": "s",
+    }, ["task", "--json"])
+    assert code == 0
+    assert json.loads(out)["failures"] == ["ollama/a (stage 2)"]
+
+
+def test_cli_recommended_in_answer_mode_only(monkeypatch, capsys):
+    ranking = "FINAL RANKING:\n1. Response A\n2. Response B\n3. Response C"
+    responses = {"ollama/a": ["answer a", ranking], "mistral/b": ["answer b", ranking],
+                 "mistral/c": ["answer c", ranking], "mistral/chair": "s"}
+    code, out = _run_cli(monkeypatch, capsys, dict(responses), ["task", "--json"])
+    data = json.loads(out)
+    top = data["rankings"][0]["model"]
+    assert data["recommended"] == [{"model": top, "response": next(
+        r["response"] for r in data["stage1"] if r["model"] == top)}]
+    code, out = _run_cli(monkeypatch, capsys, dict(responses), ["task"])
+    assert "RECOMMENDED SOLUTION (raw stage-1 response from" in out
+    code, out = _run_cli(monkeypatch, capsys, dict(responses), ["task", "--mode", "plan", "--json"])
+    assert json.loads(out)["recommended"] == []
+
+
+def test_recommended_includes_ties():
+    from backend.council import recommended_responses
+    stage1 = [{"model": "a", "response": "ra"}, {"model": "b", "response": "rb"}]
+    agg = [{"model": "a", "average_rank": 1.5, "rankings_count": 2},
+           {"model": "b", "average_rank": 1.5, "rankings_count": 2}]
+    assert [r["model"] for r in recommended_responses(stage1, agg)] == ["a", "b"]
+    assert recommended_responses(stage1, []) == []

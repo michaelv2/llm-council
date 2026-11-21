@@ -6,8 +6,10 @@ Usage:
     cat review-task.md | council --mode review --council review --json
 
 Exit code 0 on success, 1 if all stage-1 models failed or the chairman failed
-(the synthesis is then an error string, not a verdict). Failed models are
-listed under "failures" in --json output and FAILURES in the digest.
+(the synthesis is then an error string, not a verdict). Models that failed
+any stage are listed under "failures" in --json output and FAILURES in the
+digest ("(stage 2)" / "(chairman)" mark later-stage failures). In answer mode
+"recommended" holds the best-ranked model's stage-1 response.
 
 Review mode refuses any council seat or chairman listed under `implementers`
 in council.yaml. Plan mode gives each seat a random angle (--no-angles to
@@ -46,7 +48,8 @@ def _render_digest(task, mode, stage1, stage2, stage3, meta, failed) -> str:
     if agg:
         lines.append("Aggregate peer rankings (avg position, #votes):")
         for i, a in enumerate(agg, 1):
-            marker = "   <- RECOMMENDED" if i == 1 else ""
+            recommended = {r["model"] for r in meta.get("recommended", [])}
+            marker = "   <- RECOMMENDED SOLUTION" if a["model"] in recommended else ""
             lines.append(
                 f"  {i}. {a['model']}   avg {a['average_rank']}   "
                 f"({a['rankings_count']} votes){marker}"
@@ -64,6 +67,10 @@ def _render_digest(task, mode, stage1, stage2, stage3, meta, failed) -> str:
             v = i.get("votes")
             tally = f"{v['REAL']}/{v['FALSE POSITIVE']}/{v['DUPLICATE']}" if v else "new"
             lines.append(f"  {i['id']} [{tally}] {i['severity']} {i['kind']} {i['location']}: {i['description']}")
+        lines.append("")
+    for r in meta.get("recommended", []):
+        lines.append(f"RECOMMENDED SOLUTION (raw stage-1 response from {r['model']}):")
+        lines.append(r["response"])
         lines.append("")
     heading = "REVIEW CHAIRMAN VERDICT:" if mode == "review" else "CHAIRMAN SYNTHESIS:"
     lines.append(heading)
@@ -127,6 +134,8 @@ def main():
 
     succeeded = {r["model"] for r in stage1}
     failed = [e.name for e in council if e.name not in succeeded]
+    # a seat that answered stage 1 but failed stage 2 lost its votes/ranking
+    failed += [f"{name} (stage 2)" for name in meta.get("stage2_failed", [])]
     if stage3.get("failed") and stage1:
         failed.append(f"{chairman.name} (chairman)")
 
@@ -137,6 +146,7 @@ def main():
             "council": args.council,
             "chairman": stage3.get("model", ""),
             "rankings": meta.get("aggregate_rankings", []),
+            "recommended": meta.get("recommended", []),
             "roles": meta.get("roles", {}),
             "issues": meta.get("issues", []),
             "dropped": meta.get("dropped", []),

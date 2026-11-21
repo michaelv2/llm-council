@@ -55,7 +55,8 @@ def _message_content(message: dict) -> tuple[str, Any]:
             if ptype == "text":
                 texts.append(part.get("text", ""))
             elif ptype == "thinking":
-                for block in part.get("thinking", []):
+                blocks = part.get("thinking")  # may be present but null
+                for block in blocks if isinstance(blocks, list) else []:
                     if isinstance(block, dict) and block.get("type") == "text":
                         reasoning.append(block.get("text", ""))
         return "".join(texts), (reasoning or None)
@@ -82,12 +83,8 @@ class ProviderRegistry:
     """Holds ModelEntry objects and dispatches queries to the right transport."""
 
     def __init__(self, entries: list[ModelEntry]):
-        self._entries = {e.name: e for e in entries}
         self._t0 = time.monotonic()
         self.calls: list[dict] = []
-
-    def get(self, name: str) -> ModelEntry:
-        return self._entries[name]
 
     async def query(
         self,

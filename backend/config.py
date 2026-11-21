@@ -32,6 +32,8 @@ DEFAULT_CONFIG_PATH = _default_config_path()
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
+MAX_SEATS = 26  # stage-2 labels are Response A..Z
+
 
 @dataclass
 class CouncilConfig:
@@ -51,8 +53,11 @@ def _entry(raw: dict, providers: dict, where: str) -> ModelEntry:
     base_url = raw.get("base_url") or pconf.pop("base_url", "")
     if not base_url and provider == "anthropic":
         base_url = ANTHROPIC_BASE_URL
-    timeout = float(raw.get("timeout", pconf.pop("timeout", 120.0)))
-    max_tokens = int(raw.get("max_tokens", pconf.pop("max_tokens", 4096)))
+    try:
+        timeout = float(raw.get("timeout", pconf.pop("timeout", 120.0)))
+        max_tokens = int(raw.get("max_tokens", pconf.pop("max_tokens", 4096)))
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{where}: timeout and max_tokens must be numbers ({e})") from e
     if not base_url:
         raise ValueError(
             f"no base_url for provider {provider!r} (set it in council.yaml)"
@@ -94,10 +99,20 @@ def load_config(path: str | None = None) -> CouncilConfig:
             raise ValueError(f"{path}: not valid YAML: {e}") from e
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected a mapping with providers/councils/chairmen")
+    for key, kind in (("providers", dict), ("councils", dict), ("chairmen", dict), ("implementers", list)):
+        if raw.get(key) is not None and not isinstance(raw[key], kind):
+            raise ValueError(f"{path}: {key} must be a {'mapping' if kind is dict else 'list'}")
     providers = raw.get("providers") or {}
+    if not all(isinstance(p, dict) for p in providers.values()):
+        raise ValueError(f"{path}: each provider must be a mapping (base_url, key_env, ...)")
     councils = {}
     for name, entries in (raw.get("councils") or {}).items():
-        seats = [_entry(e, providers, f"{path}: councils.{name}") for e in entries or []]
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(f"{path}: council {name!r} must be a non-empty list of seats")
+        if len(entries) > MAX_SEATS:
+            raise ValueError(f"{path}: council {name!r} has {len(entries)} seats; at most {MAX_SEATS} "
+                             f"(responses are labelled A-Z)")
+        seats = [_entry(e, providers, f"{path}: councils.{name}") for e in entries]
         names = [s.name for s in seats]
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
