@@ -15,3 +15,9 @@ dependencies = [
 
 [project.scripts]
 council = "backend.cli:main"
+
+# installed by default with `uv sync` (uv's default dev group)
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
